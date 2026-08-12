@@ -1,0 +1,94 @@
+#!/bin/bash
+
+set -e
+
+BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+source "$BASE_DIR/config.conf"
+source "$BASE_DIR/lib/common.sh"
+
+# ============================================================
+# Verificar configuração
+# ============================================================
+
+if [ "${INSTALAR_GITHUB_DESKTOP:-false}" != true ]; then
+    info "GitHub Desktop desabilitado em config.conf."
+    exit 0
+fi
+
+info "Iniciando instalação do GitHub Desktop"
+
+# ============================================================
+# Verificar arquitetura
+# ============================================================
+
+ARCH="$(dpkg --print-architecture)"
+
+info "Arquitetura detectada: $ARCH"
+
+if [ "$ARCH" != "amd64" ]; then
+    error "Este módulo está configurado para arquitetura amd64."
+    exit 1
+fi
+
+# ============================================================
+# Dependências
+# ============================================================
+
+info "Instalando dependências"
+
+apt update
+
+apt install -y \
+    wget \
+    gpg \
+    ca-certificates
+
+# ============================================================
+# Chave do repositório
+# ============================================================
+
+info "Configurando chave do repositório GitHub Desktop"
+
+wget -qO - \
+    https://packagecloud.io/shiftkey/desktop/gpgkey \
+    | gpg --dearmor \
+    > /usr/share/keyrings/shiftkey-desktop.gpg
+
+# ============================================================
+# Repositório
+# ============================================================
+
+info "Configurando repositório GitHub Desktop"
+
+cat > /etc/apt/sources.list.d/shiftkey-desktop.list <<EOF
+deb [arch=amd64 signed-by=/usr/share/keyrings/shiftkey-desktop.gpg] https://packagecloud.io/shiftkey/desktop/any/ any main
+EOF
+
+# ============================================================
+# Instalação
+# ============================================================
+
+apt update
+
+info "Instalando GitHub Desktop"
+
+apt install -y github-desktop
+
+# ============================================================
+# Verificação
+# ============================================================
+
+if command -v github-desktop >/dev/null 2>&1; then
+
+    info "GitHub Desktop instalado com sucesso."
+
+else
+
+    warn "A instalação terminou, mas o executável não foi localizado no PATH."
+
+fi
+
+echo
+info "GitHub Desktop finalizado."
+info "Procure por GitHub Desktop no menu de aplicativos."
