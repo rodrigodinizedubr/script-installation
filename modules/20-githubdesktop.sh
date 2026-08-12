@@ -31,6 +31,15 @@ if [ "$ARCH" != "amd64" ]; then
     exit 1
 fi
 
+
+# ============================================================
+# Configurar repositório MWT para o GitHub Desktop  
+# ============================================================
+
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/mwt-desktop.gpg] https://mirror.mwt.me/shiftkey-desktop/deb/ any main" \
+    > /etc/apt/sources.list.d/mwt-desktop.list
+
+
 # ============================================================
 # Dependências
 # ============================================================
