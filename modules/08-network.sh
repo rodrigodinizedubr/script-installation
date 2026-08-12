@@ -6,7 +6,7 @@ source "$BASE_DIR/config.conf"
 source "$BASE_DIR/lib/common.sh"
 
 if [ "$CONFIGURAR_IP" != true ]; then
-    warn "Configuração de IP ignorada. Altere CONFIGURAR_IP=true em config.conf para ativar."
+    mark_skipped "Configuração de IP desabilitada (CONFIGURAR_IP=false)."
     exit 0
 fi
 

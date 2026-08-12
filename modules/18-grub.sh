@@ -6,7 +6,7 @@ source "$BASE_DIR/config.conf"
 source "$BASE_DIR/lib/common.sh"
 
 if [ "$CONFIGURAR_GRUB" != true ]; then
-    warn "Configuração do GRUB ignorada."
+    mark_skipped "Configuração do GRUB desabilitada (CONFIGURAR_GRUB=false)."
     exit 0
 fi
 

@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# Carrega o suporte a logs quando disponível.
+COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$COMMON_DIR/logging.sh" ]; then
+    # shellcheck source=/dev/null
+    source "$COMMON_DIR/logging.sh"
+fi
+
 info() {
     echo -e "\e[32m[INFO]\e[0m $1"
 }
@@ -10,6 +17,10 @@ warn() {
 
 error() {
     echo -e "\e[31m[ERRO]\e[0m $1"
+}
+
+success() {
+    echo -e "\e[32m[OK]\e[0m $1"
 }
 
 check_root() {
@@ -28,10 +39,26 @@ install_package() {
 
     if package_installed "$package"; then
         info "$package já está instalado."
-    else
-        info "Instalando $package..."
-        apt install -y "$package"
+        if declare -F record_package_status >/dev/null 2>&1; then
+            record_package_status "JA_EXISTIA" "$package" "Pacote já presente antes desta execução"
+        fi
+        return 0
     fi
+
+    info "Instalando $package..."
+    if apt install -y "$package"; then
+        success "$package instalado com sucesso."
+        if declare -F record_package_status >/dev/null 2>&1; then
+            record_package_status "INSTALADO" "$package" "Instalação concluída"
+        fi
+        return 0
+    fi
+
+    error "Falha ao instalar $package."
+    if declare -F record_package_status >/dev/null 2>&1; then
+        record_package_status "FALHA" "$package" "apt install retornou erro"
+    fi
+    return 1
 }
 
 command_exists() {

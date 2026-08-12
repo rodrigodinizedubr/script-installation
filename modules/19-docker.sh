@@ -7,6 +7,11 @@ BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$BASE_DIR/config.conf"
 source "$BASE_DIR/lib/common.sh"
 
+if [ "${INSTALAR_DOCKER:-false}" != true ]; then
+    mark_skipped "Docker Engine desabilitado (INSTALAR_DOCKER=false)."
+    exit 0
+fi
+
 info "Iniciando instalação do Docker"
 
 # ============================================================
@@ -156,6 +161,13 @@ fi
 # 10. Docker Desktop
 # ============================================================
 
+if [ "${INSTALAR_DOCKER_DESKTOP:-false}" != true ]; then
+    info "Docker Desktop desabilitado em config.conf."
+    record_component_status "IGNORADO" "Docker Desktop" "INSTALAR_DOCKER_DESKTOP=false"
+    record_component_status "OK" "Docker Engine" "Instalado e validado"
+    exit 0
+fi
+
 info "Verificando possibilidade de instalar Docker Desktop"
 
 if [ "$ARCH" != "amd64" ]; then
@@ -163,6 +175,8 @@ if [ "$ARCH" != "amd64" ]; then
     warn "Docker Desktop não será instalado."
     warn "Arquitetura encontrada: $ARCH"
     warn "Este módulo instala Docker Desktop apenas em amd64."
+    record_component_status "IGNORADO" "Docker Desktop" "Arquitetura não suportada: $ARCH"
+    record_component_status "OK" "Docker Engine" "Instalado e validado"
 
     exit 0
 
@@ -177,6 +191,8 @@ if [ "$VERSAO_MAJOR" -lt 12 ]; then
     warn "Docker Engine foi instalado."
     warn "Docker Desktop não será instalado no Debian $VERSAO_DEBIAN."
     warn "Utilize Debian 12 ou superior."
+    record_component_status "IGNORADO" "Docker Desktop" "Debian $VERSAO_DEBIAN não atende ao requisito"
+    record_component_status "OK" "Docker Engine" "Instalado e validado"
 
     exit 0
 
@@ -247,6 +263,8 @@ rm -f "$DOCKER_DESKTOP_DEB"
 # ============================================================
 
 info "Docker Engine e Docker Desktop instalados."
+record_component_status "OK" "Docker Engine" "Instalado e validado"
+record_component_status "OK" "Docker Desktop" "Pacote instalado"
 
 echo
 echo "Docker:"

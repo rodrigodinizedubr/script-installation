@@ -12,7 +12,7 @@ source "$BASE_DIR/lib/common.sh"
 # ============================================================
 
 if [ "${INSTALAR_GITHUB_DESKTOP:-false}" != true ]; then
-    info "GitHub Desktop desabilitado em config.conf."
+    mark_skipped "GitHub Desktop desabilitado (INSTALAR_GITHUB_DESKTOP=false)."
     exit 0
 fi
 
@@ -82,10 +82,12 @@ apt install -y github-desktop
 if command -v github-desktop >/dev/null 2>&1; then
 
     info "GitHub Desktop instalado com sucesso."
+    record_component_status "INSTALADO" "GitHub Desktop" "Executável encontrado após instalação"
 
 else
 
     warn "A instalação terminou, mas o executável não foi localizado no PATH."
+    record_component_status "FALHA" "GitHub Desktop" "Executável não localizado no PATH"
 
 fi
 

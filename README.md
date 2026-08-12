@@ -1,6 +1,6 @@
-# Debian Setup
+# Script Installation - Debian
 
-Scripts modulares para configurar uma VM Debian com interface gráfica, ferramentas de rede, desenvolvimento, navegadores, Tilix, Wireshark, VSCode, pyenv, fontes e configurações opcionais.
+Scripts modulares para configurar uma VM Debian com interface gráfica, ferramentas de rede, desenvolvimento, navegadores, Tilix, Wireshark, VS Code, pyenv, Docker e outras configurações opcionais.
 
 ## Como usar
 
@@ -13,7 +13,7 @@ sudo ./setup.sh
 
 ## Antes de executar
 
-Edite o arquivo `config.conf` e ajuste principalmente:
+Edite `config.conf` e revise principalmente:
 
 - `USUARIO="operador"`
 - `HOSTNAME_NOVO="workstation"`
@@ -21,15 +21,21 @@ Edite o arquivo `config.conf` e ajuste principalmente:
 - `INSTALAR_CHROME=true`
 - `INSTALAR_PYTHON_COM_PYENV=false`
 - `CONFIGURAR_GRUB=false`
+- `INSTALAR_DOCKER=true`
+- `INSTALAR_DOCKER_DESKTOP=true`
+- `INSTALAR_GITHUB_DESKTOP=true`
+- `INSTALAR_EXTENSOES_VSCODE=true`
+- `DESABILITAR_BLOQUEIO_TELA=true`
 
 ## Estrutura
 
 ```text
-debian-setup/
+script-installation/
 ├── setup.sh
 ├── config.conf
 ├── lib/
-│   └── common.sh
+│   ├── common.sh
+│   └── logging.sh
 ├── modules/
 │   ├── 01-repositories.sh
 │   ├── 02-update.sh
@@ -41,44 +47,45 @@ debian-setup/
 │   ├── 08-network.sh
 │   ├── 09-flatpak.sh
 │   ├── 10-tools.sh
-│   ├── 11-browsers.sh
-│   ├── 12-wireshark.sh
+│   ├── 11-wireshark.sh
+│   ├── 12-browsers.sh
 │   ├── 13-tilix.sh
 │   ├── 14-vscode.sh
 │   ├── 15-pyenv.sh
 │   ├── 16-fonts.sh
 │   ├── 17-packet-tracer.sh
-│   └── 18-grub.sh
-├── assets/
-│   ├── fonts/
-│   └── grub/
+│   ├── 18-grub.sh
+│   ├── 19-docker.sh
+│   ├── 20-githubdesktop.sh
+│   ├── 21-vscode-extensions.sh
+│   └── 22-disable-screen-lock.sh
 └── logs/
 ```
 
+## Logs
+
+Cada execução recebe um identificador baseado em data e hora. O instalador gera:
+
+- `setup-AAAAMMDD-HHMMSS.log`: saída completa mostrada no terminal.
+- `setup-AAAAMMDD-HHMMSS-summary.log`: relatório resumido de módulos, pacotes e componentes.
+- `setup-AAAAMMDD-HHMMSS-modules.tsv`: estado estruturado de cada módulo.
+- `setup-AAAAMMDD-HHMMSS-packages.tsv`: pacotes processados por `install_package`.
+- `setup-AAAAMMDD-HHMMSS-components.tsv`: componentes adicionais e verificações.
+
+Estados usados no resumo:
+
+- `OK`: módulo executado corretamente.
+- `FALHA`: módulo retornou erro.
+- `IGNORADO`: módulo opcional foi desabilitado em `config.conf`.
+- `INSTALADO`: pacote/componente instalado durante a execução.
+- `JA_EXISTIA`: já estava instalado antes da execução.
+
+O módulo `14-vscode.sh` instala o aplicativo VS Code; as extensões ficam exclusivamente no `21-vscode-extensions.sh`, evitando instalação duplicada.
+
+Uma falha em um módulo não interrompe imediatamente os módulos seguintes. O `setup.sh` registra a falha, continua a execução e retorna código diferente de zero no final se alguma etapa tiver falhado.
+
 ## Observações
 
-Algumas etapas dos PDFs continuam dependendo da interface gráfica, como:
+Algumas etapas continuam dependendo da interface gráfica, como fixar ícones na barra lateral, configurar visualmente o Dash to Dock, instalar extensões no Firefox, selecionar manualmente o tema Dracula no Tilix e inserir a imagem dos Adicionais para Convidado pelo menu do VirtualBox.
 
-- Fixar ícones na barra lateral.
-- Configurar visualmente o Dash to Dock.
-- Instalar extensões no Firefox, como uBlock Origin.
-- Selecionar manualmente o tema Dracula no Tilix.
-- Inserir a imagem dos Adicionais para Convidado pelo menu do VirtualBox.
-
-## tealdeer
-
-O pacote `tldr` foi substituído por `tealdeer`. Após a instalação, o comando normalmente usado continua sendo:
-
-```bash
-tldr comando
-```
-
-## Wireshark
-
-O módulo `12-wireshark.sh` contém a linha solicitada:
-
-```bash
-groupadd wireshark || true
-```
-
-Ela foi escrita com `|| true` para evitar falha caso o grupo já exista.
+O pacote `tldr` foi substituído por `tealdeer`; o comando de uso continua sendo `tldr`.

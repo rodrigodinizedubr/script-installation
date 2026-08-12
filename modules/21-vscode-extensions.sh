@@ -12,7 +12,7 @@ source "$BASE_DIR/lib/common.sh"
 # ============================================================
 
 if [ "${INSTALAR_EXTENSOES_VSCODE:-true}" != true ]; then
-    info "Instalação das extensões do VS Code desabilitada."
+    mark_skipped "Extensões do VS Code desabilitadas (INSTALAR_EXTENSOES_VSCODE=false)."
     exit 0
 fi
 
@@ -97,6 +97,7 @@ for EXTENSAO in "${EXTENSOES[@]}"; do
         | grep -Fxqi "$EXTENSAO"; then
 
         info "Extensão já instalada: $EXTENSAO"
+        record_component_status "JA_EXISTIA" "VSCode:$EXTENSAO" "Extensão já instalada"
         continue
 
     fi
@@ -112,10 +113,12 @@ for EXTENSAO in "${EXTENSOES[@]}"; do
         --force; then
 
         info "Instalada com sucesso: $EXTENSAO"
+        record_component_status "INSTALADO" "VSCode:$EXTENSAO" "Extensão instalada"
 
     else
 
         warn "Falha ao instalar: $EXTENSAO"
+        record_component_status "FALHA" "VSCode:$EXTENSAO" "code --install-extension retornou erro"
 
     fi
 

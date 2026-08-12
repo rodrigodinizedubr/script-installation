@@ -10,33 +10,18 @@ ensure_user_exists "$USUARIO"
 
 if command_exists code; then
     info "VSCode já está instalado."
+    record_component_status "JA_EXISTIA" "Visual Studio Code" "Executável code encontrado"
 else
     wget -O /tmp/vscode.deb "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-x64"
-    dpkg -i /tmp/vscode.deb || apt --fix-broken install -y
+    if dpkg -i /tmp/vscode.deb || apt --fix-broken install -y; then
+        record_component_status "INSTALADO" "Visual Studio Code" "Instalação concluída"
+    else
+        record_component_status "FALHA" "Visual Studio Code" "dpkg/apt retornou erro"
+        exit 1
+    fi
 fi
 
-info "Instalando extensões do VSCode para o usuário $USUARIO"
-
-EXTENSOES=(
-    ms-python.python
-    ms-python.vscode-pylance
-    ms-python.debugpy
-    ms-python.autopep8
-    dracula-theme.theme-dracula
-    VisualStudioExptTeam.vscodeintellicode
-    vscode-icons-team.vscode-icons
-    redhat.ansible
-    ritwickdey.LiveServer
-    Monish.regexsnippets
-    pnp.polacode
-    alexcvzz.vscode-sqlite
-    alefragnani.Bookmarks
-    aaron-bond.better-comments
-)
-
-for ext in "${EXTENSOES[@]}"; do
-    sudo -u "$USUARIO" code --install-extension "$ext" || warn "Falha ao instalar extensão: $ext"
-done
+info "Extensões do VS Code serão tratadas pelo módulo 21-vscode-extensions.sh."
 
 mkdir -p "/home/$USUARIO/Documentos/Code"
 cat > "/home/$USUARIO/Documentos/Code/main.py" <<'EOF_MAINPY'

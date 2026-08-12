@@ -23,9 +23,13 @@ if [ "$INSTALAR_FONTES_ASSETS" = true ]; then
         info "Copiando fontes de assets/fonts para /usr/share/fonts/custom"
         mkdir -p /usr/share/fonts/custom
         cp -r "$BASE_DIR/assets/fonts/"* /usr/share/fonts/custom/
+        record_component_status "INSTALADO" "Fontes de assets/fonts" "Copiadas para /usr/share/fonts/custom"
     else
         warn "INSTALAR_FONTES_ASSETS=true, mas assets/fonts está vazio."
+        record_component_status "FALHA" "Fontes de assets/fonts" "Diretório inexistente ou vazio"
     fi
+else
+    mark_component_skipped "Fontes de assets/fonts" "INSTALAR_FONTES_ASSETS=false"
 fi
 
 fc-cache -fv

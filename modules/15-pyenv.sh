@@ -54,8 +54,14 @@ chown "$USUARIO:$USUARIO" "$BASHRC"
 
 if [ "$INSTALAR_PYTHON_COM_PYENV" = true ]; then
     info "Instalando Python $PYTHON_VERSION com pyenv. Isso pode demorar."
-    sudo -u "$USUARIO" bash -lc "pyenv install -s $PYTHON_VERSION && pyenv global $PYTHON_VERSION"
+    if sudo -u "$USUARIO" bash -lc "pyenv install -s $PYTHON_VERSION && pyenv global $PYTHON_VERSION"; then
+        record_component_status "INSTALADO" "Python $PYTHON_VERSION via pyenv" "Versão global configurada"
+    else
+        record_component_status "FALHA" "Python $PYTHON_VERSION via pyenv" "Falha na instalação/configuração"
+        exit 1
+    fi
 else
     warn "Python pelo pyenv não será instalado automaticamente."
     warn "Para instalar depois: pyenv install $PYTHON_VERSION && pyenv global $PYTHON_VERSION"
+    mark_component_skipped "Python $PYTHON_VERSION via pyenv" "INSTALAR_PYTHON_COM_PYENV=false"
 fi
