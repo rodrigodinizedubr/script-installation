@@ -13,6 +13,14 @@ source "$BASE_DIR/lib/common.sh"
 
 if [ "${CONFIGURAR_FAVORITOS_GNOME:-true}" != true ]; then
     info "Configuração dos favoritos do GNOME desabilitada."
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "IGNORADO" \
+            "Favoritos GNOME" \
+            "CONFIGURAR_FAVORITOS_GNOME=false"
+    fi
+
     exit 0
 fi
 
@@ -40,18 +48,25 @@ if ! command -v gsettings >/dev/null 2>&1; then
 fi
 
 # ============================================================
-# Verificar D-Bus da sessão gráfica
+# Verificar sessão gráfica / D-Bus
 # ============================================================
 
 if [ ! -S "$DBUS_SOCKET" ]; then
     warn "D-Bus da sessão gráfica do usuário $USUARIO não encontrado."
     warn "Arquivo esperado: $DBUS_SOCKET"
-    warn "Os favoritos do GNOME não serão alterados."
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "IGNORADO" \
+            "Favoritos GNOME" \
+            "Sessão gráfica do usuário não disponível"
+    fi
+
     exit 0
 fi
 
 # ============================================================
-# Função para executar gsettings como o usuário correto
+# Função para executar gsettings na sessão do usuário
 # ============================================================
 
 gsettings_usuario() {
@@ -61,21 +76,18 @@ gsettings_usuario() {
 }
 
 # ============================================================
-# Aplicativos que desejamos adicionar aos favoritos
+# Verificar lista configurada
 # ============================================================
 
-APLICATIVOS=(
-    "org.gnome.Terminal.desktop"
-    "firefox-esr.desktop"
-    "google-chrome.desktop"
-    "com.obsproject.Studio.desktop"
-    "org.shotcut.Shotcut.desktop"
-    "org.flameshot.Flameshot.desktop"
-    "org.wireshark.Wireshark.desktop"
-    "com.gexperts.Tilix.desktop"
-    "code.desktop"
-    "github-desktop.desktop"
-)
+if ! declare -p FAVORITOS_GNOME >/dev/null 2>&1; then
+    error "A variável FAVORITOS_GNOME não foi definida no config.conf."
+    exit 1
+fi
+
+if [ "${#FAVORITOS_GNOME[@]}" -eq 0 ]; then
+    warn "A lista FAVORITOS_GNOME está vazia."
+    exit 0
+fi
 
 # ============================================================
 # Diretórios onde arquivos .desktop podem existir
@@ -88,92 +100,59 @@ DIRETORIOS_DESKTOP=(
 )
 
 # ============================================================
-# Localizar aplicativos realmente instalados
+# Validar aplicativos na ordem definida no config.conf
 # ============================================================
 
-NOVOS_FAVORITOS=()
+FAVORITOS_VALIDOS=()
 
-for APP in "${APLICATIVOS[@]}"; do
+info "Verificando aplicativos configurados"
+
+for APP in "${FAVORITOS_GNOME[@]}"; do
 
     ENCONTRADO=false
 
     for DIRETORIO in "${DIRETORIOS_DESKTOP[@]}"; do
 
         if [ -f "$DIRETORIO/$APP" ]; then
-
-            info "Aplicativo encontrado: $APP"
-
-            NOVOS_FAVORITOS+=("$APP")
-
             ENCONTRADO=true
-
             break
-
         fi
 
     done
 
-    if [ "$ENCONTRADO" = false ]; then
+    if [ "$ENCONTRADO" = true ]; then
+
+        info "Aplicativo encontrado: $APP"
+        FAVORITOS_VALIDOS+=("$APP")
+
+    else
+
         warn "Aplicativo não encontrado: $APP"
+
     fi
 
 done
 
 # ============================================================
-# Verificar se algum aplicativo foi localizado
+# Verificar se algum aplicativo foi encontrado
 # ============================================================
 
-if [ "${#NOVOS_FAVORITOS[@]}" -eq 0 ]; then
-    warn "Nenhum aplicativo foi localizado para adicionar aos favoritos."
-    exit 0
+if [ "${#FAVORITOS_VALIDOS[@]}" -eq 0 ]; then
+    error "Nenhum aplicativo configurado foi encontrado."
+    exit 1
 fi
 
 # ============================================================
-# Ler favoritos atuais do GNOME
+# Remover duplicidades preservando a ordem
 # ============================================================
 
-info "Lendo favoritos atuais"
+FAVORITOS_UNICOS=()
 
-FAVORITOS_ATUAIS="$(
-    gsettings_usuario get \
-        org.gnome.shell \
-        favorite-apps
-)"
-
-echo
-echo "Favoritos atuais:"
-echo "$FAVORITOS_ATUAIS"
-echo
-
-# ============================================================
-# Converter favoritos atuais para array Bash
-# ============================================================
-
-mapfile -t FAVORITOS_EXISTENTES < <(
-    echo "$FAVORITOS_ATUAIS" \
-        | tr -d "[]" \
-        | tr "," "\n" \
-        | sed \
-            -e "s/^[[:space:]]*'//" \
-            -e "s/'[[:space:]]*$//" \
-            -e '/^$/d'
-)
-
-# ============================================================
-# Unir favoritos atuais + novos sem duplicar
-# ============================================================
-
-FAVORITOS_FINAIS=()
-
-for APP in "${FAVORITOS_EXISTENTES[@]}"; do
-    FAVORITOS_FINAIS+=("$APP")
-done
-
-for APP in "${NOVOS_FAVORITOS[@]}"; do
+for APP in "${FAVORITOS_VALIDOS[@]}"; do
 
     JA_EXISTE=false
 
-    for EXISTENTE in "${FAVORITOS_FINAIS[@]}"; do
+    for EXISTENTE in "${FAVORITOS_UNICOS[@]}"; do
 
         if [ "$EXISTENTE" = "$APP" ]; then
             JA_EXISTE=true
@@ -183,18 +162,18 @@ for APP in "${NOVOS_FAVORITOS[@]}"; do
     done
 
     if [ "$JA_EXISTE" = false ]; then
-        FAVORITOS_FINAIS+=("$APP")
+        FAVORITOS_UNICOS+=("$APP")
     fi
 
 done
 
 # ============================================================
-# Montar lista no formato esperado pelo gsettings
+# Construir lista no formato esperado pelo gsettings
 # ============================================================
 
 LISTA="["
 
-for APP in "${FAVORITOS_FINAIS[@]}"; do
+for APP in "${FAVORITOS_UNICOS[@]}"; do
     LISTA+="'$APP', "
 done
 
@@ -202,23 +181,42 @@ LISTA="${LISTA%, }"
 LISTA+="]"
 
 # ============================================================
-# Mostrar configuração que será aplicada
+# Exibir ordem que será aplicada
 # ============================================================
 
 echo
-info "Favoritos que serão configurados:"
+info "Ordem dos favoritos que será aplicada:"
+echo
 
-for APP in "${FAVORITOS_FINAIS[@]}"; do
-    echo "  - $APP"
+POSICAO=1
+
+for APP in "${FAVORITOS_UNICOS[@]}"; do
+    printf "  %02d - %s\n" "$POSICAO" "$APP"
+    POSICAO=$((POSICAO + 1))
 done
 
 echo
 
 # ============================================================
-# Aplicar configuração
+# Mostrar configuração atual
 # ============================================================
 
-info "Aplicando favoritos no GNOME"
+info "Favoritos atuais do GNOME:"
+
+FAVORITOS_ANTES="$(
+    gsettings_usuario get \
+        org.gnome.shell \
+        favorite-apps
+)"
+
+echo "$FAVORITOS_ANTES"
+echo
+
+# ============================================================
+# Aplicar lista ordenada
+# ============================================================
+
+info "Aplicando nova ordem dos favoritos"
 
 gsettings_usuario set \
     org.gnome.shell \
@@ -226,10 +224,10 @@ gsettings_usuario set \
     "$LISTA"
 
 # ============================================================
-# Ler configuração final
+# Ler configuração após alteração
 # ============================================================
 
-FAVORITOS_CONFIGURADOS="$(
+FAVORITOS_DEPOIS="$(
     gsettings_usuario get \
         org.gnome.shell \
         favorite-apps
@@ -237,50 +235,39 @@ FAVORITOS_CONFIGURADOS="$(
 
 echo
 info "Favoritos após configuração:"
-echo "$FAVORITOS_CONFIGURADOS"
+echo "$FAVORITOS_DEPOIS"
 echo
 
 # ============================================================
-# Validar favoritos adicionados
+# Validar a ordem final
 # ============================================================
 
-FALHA=false
+LISTA_ESPERADA="$LISTA"
 
-for APP in "${NOVOS_FAVORITOS[@]}"; do
+if [ "$FAVORITOS_DEPOIS" = "$LISTA_ESPERADA" ]; then
 
-    if [[ "$FAVORITOS_CONFIGURADOS" == *"'$APP'"* ]]; then
-
-        info "Favorito validado: $APP"
-
-    else
-
-        warn "Favorito não encontrado após configuração: $APP"
-        FALHA=true
-
-    fi
-
-done
-
-# ============================================================
-# Registrar resultado
-# ============================================================
-
-if [ "$FALHA" = false ]; then
-
-    info "Favoritos do GNOME configurados e validados com sucesso."
+    info "Favoritos do GNOME configurados na ordem desejada."
 
     if declare -F registrar_componente >/dev/null 2>&1; then
         registrar_componente \
             "OK" \
             "Favoritos GNOME" \
-            "Aplicativos adicionados e validados"
+            "Ordem aplicada e validada"
     fi
 
     exit 0
 
 else
 
-    error "Nem todos os favoritos foram aplicados corretamente."
+    error "A configuração final dos favoritos diverge da lista esperada."
+
+    echo
+    error "Esperado:"
+    echo "$LISTA_ESPERADA"
+
+    echo
+    error "Obtido:"
+    echo "$FAVORITOS_DEPOIS"
 
     if declare -F registrar_componente >/dev/null 2>&1; then
         registrar_componente \
@@ -290,5 +277,4 @@ else
     fi
 
     exit 1
-
 fi
