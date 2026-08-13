@@ -5,6 +5,11 @@ BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$BASE_DIR/config.conf"
 source "$BASE_DIR/lib/common.sh"
 
+
+# ============================================================
+# Instalar CHROME
+# ============================================================
+
 if [ "${INSTALAR_CHROME:-false}" != true ] && [ "${INSTALAR_OPERA:-false}" != true ]; then
     mark_skipped "Navegadores opcionais desabilitados (Chrome e Opera)."
     exit 0
@@ -35,20 +40,70 @@ else
     mark_component_skipped "Google Chrome" "INSTALAR_CHROME=false"
 fi
 
-if [ "$INSTALAR_OPERA" = true ]; then
+# ============================================================
+# Instalar Opera
+# ============================================================
+
+if [ "${INSTALAR_OPERA:-false}" = true ]; then
+
+    info "Configurando repositório do Opera"
+
+    install -m 0755 -d /etc/apt/keyrings
+
+    wget -qO /tmp/opera.gpg \
+        https://deb.opera.com/archive.key
+
+    gpg --dearmor \
+        < /tmp/opera.gpg \
+        > /etc/apt/keyrings/opera.gpg
+
+    chmod a+r /etc/apt/keyrings/opera.gpg
+
+    cat > /etc/apt/sources.list.d/opera.sources <<EOF
+Types: deb
+URIs: https://deb.opera.com/opera-stable/
+Suites: stable
+Components: non-free
+Signed-By: /etc/apt/keyrings/opera.gpg
+EOF
+
+    apt update
+
     info "Instalando Opera"
 
-    if [ -n "$OPERA_DEB" ] && [ -f "$OPERA_DEB" ]; then
-        if dpkg -i "$OPERA_DEB" || apt --fix-broken install -y; then
-            record_component_status "INSTALADO" "Opera" "Instalação concluída"
-        else
-            record_component_status "FALHA" "Opera" "dpkg/apt retornou erro"
+    apt install -y opera-stable
+
+    if command -v opera >/dev/null 2>&1; then
+        info "Opera instalado com sucesso."
+
+        if declare -F registrar_componente >/dev/null 2>&1; then
+            registrar_componente \
+                "INSTALADO" \
+                "Opera" \
+                "Instalação concluída"
         fi
     else
-        warn "Arquivo .deb do Opera não encontrado. Configure OPERA_DEB em config.conf."
-        record_component_status "FALHA" "Opera" "Arquivo .deb não encontrado"
+        error "Opera não foi localizado após a instalação."
+
+        if declare -F registrar_componente >/dev/null 2>&1; then
+            registrar_componente \
+                "FALHA" \
+                "Opera" \
+                "Executável não encontrado após instalação"
+        fi
+
+        exit 1
     fi
+
 else
-    warn "Instalação do Opera ignorada."
-    mark_component_skipped "Opera" "INSTALAR_OPERA=false"
+
+    info "Instalação do Opera desabilitada."
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "IGNORADO" \
+            "Opera" \
+            "INSTALAR_OPERA=false"
+    fi
+
 fi
