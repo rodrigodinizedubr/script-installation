@@ -243,7 +243,7 @@ fi
 info "Verificando disponibilidade do pacote github-desktop"
 
 CANDIDATO="$(
-    apt-cache policy github-desktop \
+    LC_ALL=C apt-cache policy github-desktop \
     | awk '/Candidate:/ {print $2}'
 )"
 
