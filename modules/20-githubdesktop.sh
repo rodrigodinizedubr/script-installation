@@ -12,11 +12,28 @@ source "$BASE_DIR/lib/common.sh"
 # ============================================================
 
 if [ "${INSTALAR_GITHUB_DESKTOP:-false}" != true ]; then
-    mark_skipped "GitHub Desktop desabilitado (INSTALAR_GITHUB_DESKTOP=false)."
+    info "Instalação do GitHub Desktop desabilitada."
+    
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "IGNORADO" \
+            "GitHub Desktop" \
+            "INSTALAR_GITHUB_DESKTOP=false"
+    fi
+
     exit 0
 fi
 
 info "Iniciando instalação do GitHub Desktop"
+
+# ============================================================
+# Verificar execução como root
+# ============================================================
+
+if [ "$EUID" -ne 0 ]; then
+    error "Este módulo deve ser executado como root."
+    exit 1
+fi
 
 # ============================================================
 # Verificar arquitetura
@@ -27,79 +44,306 @@ ARCH="$(dpkg --print-architecture)"
 info "Arquitetura detectada: $ARCH"
 
 if [ "$ARCH" != "amd64" ]; then
-    error "Este módulo está configurado para arquitetura amd64."
+    error "GitHub Desktop não será instalado."
+    error "Arquitetura suportada neste módulo: amd64."
+    error "Arquitetura encontrada: $ARCH"
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "FALHA" \
+            "GitHub Desktop" \
+            "Arquitetura não suportada: $ARCH"
+    fi
+
     exit 1
 fi
 
+# ============================================================
+# Definir caminhos utilizados
+# ============================================================
+
+KEYRING="/usr/share/keyrings/mwt-desktop.gpg"
+
+REPOSITORY_LIST="/etc/apt/sources.list.d/mwt-desktop.list"
+
+REPOSITORY_SOURCES="/etc/apt/sources.list.d/mwt-desktop.sources"
+
+GPG_URL="https://mirror.mwt.me/shiftkey-desktop/gpgkey"
+
+REPOSITORY_URL="https://mirror.mwt.me/shiftkey-desktop/deb/"
 
 # ============================================================
-# Configurar repositório MWT para o GitHub Desktop  
+# Remover configurações antigas ou incompletas
 # ============================================================
 
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/mwt-desktop.gpg] https://mirror.mwt.me/shiftkey-desktop/deb/ any main" \
-    > /etc/apt/sources.list.d/mwt-desktop.list
+info "Removendo configurações antigas do repositório GitHub Desktop"
 
+rm -f "$REPOSITORY_LIST"
+rm -f "$REPOSITORY_SOURCES"
+rm -f "$KEYRING"
+
+# Também remover configuração antiga baseada em PackageCloud
+rm -f /etc/apt/sources.list.d/shiftkey-desktop.list
+rm -f /etc/apt/sources.list.d/shiftkey-desktop.sources
+rm -f /usr/share/keyrings/shiftkey-desktop.gpg
 
 # ============================================================
-# Dependências
+# Instalar dependências
 # ============================================================
 
 info "Instalando dependências"
 
-apt update
+# Não executar apt update aqui.
+# Um repositório antigo/quebrado poderia impedir a execução.
 
 apt install -y \
     wget \
+    curl \
     gpg \
     ca-certificates
 
 # ============================================================
-# Chave do repositório
+# Criar diretório de keyrings
 # ============================================================
 
-info "Configurando chave do repositório GitHub Desktop"
+info "Preparando diretório de chaves"
 
-wget -qO - \
-    https://packagecloud.io/shiftkey/desktop/gpgkey \
-    | gpg --dearmor \
-    > /usr/share/keyrings/shiftkey-desktop.gpg
+install -m 0755 -d /usr/share/keyrings
 
 # ============================================================
-# Repositório
+# Baixar chave GPG
 # ============================================================
 
-info "Configurando repositório GitHub Desktop"
+info "Baixando chave GPG do repositório GitHub Desktop"
 
-cat > /etc/apt/sources.list.d/shiftkey-desktop.list <<EOF
-deb [arch=amd64 signed-by=/usr/share/keyrings/shiftkey-desktop.gpg] https://packagecloud.io/shiftkey/desktop/any/ any main
+GPG_TEMP="/tmp/mwt-desktop-gpgkey"
+
+rm -f "$GPG_TEMP"
+
+if ! curl -fsSL "$GPG_URL" -o "$GPG_TEMP"; then
+
+    error "Não foi possível baixar a chave GPG."
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "FALHA" \
+            "GitHub Desktop" \
+            "Falha ao baixar chave GPG"
+    fi
+
+    exit 1
+fi
+
+# ============================================================
+# Validar chave GPG antes da conversão
+# ============================================================
+
+info "Validando chave GPG"
+
+if ! gpg --show-keys "$GPG_TEMP" >/dev/null 2>&1; then
+
+    error "O arquivo obtido não contém uma chave OpenPGP válida."
+
+    rm -f "$GPG_TEMP"
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "FALHA" \
+            "GitHub Desktop" \
+            "Chave GPG inválida"
+    fi
+
+    exit 1
+fi
+
+# ============================================================
+# Converter chave para keyring
+# ============================================================
+
+info "Criando keyring do repositório GitHub Desktop"
+
+if ! gpg \
+    --dearmor \
+    --yes \
+    --output "$KEYRING" \
+    "$GPG_TEMP"; then
+
+    error "Não foi possível criar o keyring."
+
+    rm -f "$GPG_TEMP"
+
+    exit 1
+fi
+
+rm -f "$GPG_TEMP"
+
+chmod 644 "$KEYRING"
+
+# ============================================================
+# Validar keyring criado
+# ============================================================
+
+if ! gpg --show-keys "$KEYRING" >/dev/null 2>&1; then
+
+    error "O keyring criado não pôde ser validado."
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "FALHA" \
+            "GitHub Desktop" \
+            "Keyring inválido"
+    fi
+
+    exit 1
+fi
+
+info "Chave GPG validada com sucesso."
+
+# ============================================================
+# Configurar repositório MWT para o GitHub Desktop
+# ============================================================
+
+info "Configurando repositório MWT para o GitHub Desktop"
+
+cat > "$REPOSITORY_SOURCES" <<EOF
+Types: deb
+URIs: $REPOSITORY_URL
+Suites: any
+Components: main
+Architectures: amd64
+Signed-By: $KEYRING
 EOF
 
+chmod 644 "$REPOSITORY_SOURCES"
+
 # ============================================================
-# Instalação
+# Atualizar lista de pacotes
 # ============================================================
 
-apt update
+info "Atualizando lista de pacotes"
+
+if ! apt update; then
+
+    error "Falha ao atualizar os repositórios APT."
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "FALHA" \
+            "GitHub Desktop" \
+            "Falha no apt update"
+    fi
+
+    exit 1
+fi
+
+# ============================================================
+# Verificar disponibilidade do pacote
+# ============================================================
+
+info "Verificando disponibilidade do pacote github-desktop"
+
+CANDIDATO="$(
+    apt-cache policy github-desktop \
+    | awk '/Candidate:/ {print $2}'
+)"
+
+if [ -z "$CANDIDATO" ] || [ "$CANDIDATO" = "(none)" ]; then
+
+    error "O pacote github-desktop não possui uma versão candidata."
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "FALHA" \
+            "GitHub Desktop" \
+            "Pacote não disponível no repositório"
+    fi
+
+    exit 1
+fi
+
+info "Versão candidata encontrada: $CANDIDATO"
+
+# ============================================================
+# Verificar se já está instalado
+# ============================================================
+
+if dpkg -s github-desktop >/dev/null 2>&1; then
+
+    info "GitHub Desktop já está instalado."
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "JA_EXISTIA" \
+            "GitHub Desktop" \
+            "Pacote já instalado"
+    fi
+
+    exit 0
+fi
+
+# ============================================================
+# Instalar GitHub Desktop
+# ============================================================
 
 info "Instalando GitHub Desktop"
 
-apt install -y github-desktop
+if ! apt install -y github-desktop; then
+
+    error "Falha durante a instalação do GitHub Desktop."
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "FALHA" \
+            "GitHub Desktop" \
+            "apt install retornou erro"
+    fi
+
+    exit 1
+fi
 
 # ============================================================
-# Verificação
+# Verificar instalação
 # ============================================================
 
-if command -v github-desktop >/dev/null 2>&1; then
+info "Validando instalação do GitHub Desktop"
+
+if dpkg -s github-desktop >/dev/null 2>&1; then
+
+    VERSAO="$(
+        dpkg-query \
+            -W \
+            -f='${Version}' \
+            github-desktop \
+            2>/dev/null
+    )"
 
     info "GitHub Desktop instalado com sucesso."
-    record_component_status "INSTALADO" "GitHub Desktop" "Executável encontrado após instalação"
+    info "Versão instalada: $VERSAO"
+
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "INSTALADO" \
+            "GitHub Desktop" \
+            "Versão $VERSAO"
+    fi
 
 else
 
-    warn "A instalação terminou, mas o executável não foi localizado no PATH."
-    record_component_status "FALHA" "GitHub Desktop" "Executável não localizado no PATH"
+    error "O pacote github-desktop não foi encontrado após a instalação."
 
+    if declare -F registrar_componente >/dev/null 2>&1; then
+        registrar_componente \
+            "FALHA" \
+            "GitHub Desktop" \
+            "Pacote não encontrado após instalação"
+    fi
+
+    exit 1
 fi
 
+# ============================================================
+# Finalização
+# ============================================================
+
 echo
-info "GitHub Desktop finalizado."
-info "Procure por GitHub Desktop no menu de aplicativos."
+info "Instalação do GitHub Desktop concluída."
