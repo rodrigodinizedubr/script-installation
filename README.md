@@ -4,11 +4,20 @@ Scripts modulares para configurar uma VM Debian com interface gráfica, ferramen
 
 ## Como usar
 
+- Instale o Linux Debian no VirtualBox.
+- Após a instalação, inicie a máquina virtual.
+- No VirtualBox clique em `Dispositivos` em seguida `Inserir imagem de CD dos Adicionais para Convidados`.
+- Acesse a máquina virtual, abra o terminal.
+- Execute o comando `ls /media/cdrom` ou `ls/media/cdrom0`
+- Verifique a presença dos arquivos da imagem de CD dos Adicionais para Convidados.
+- Execute o comando `apt update`
+- Instale o git através do comando `apt install git -y`
+- Clone o repositório, `git clone https://github.com/rodrigodinizedubr/script-installation.git`
+- Atribua permissão nos arquivos a seguir:
 ```bash
 chmod +x setup.sh
 chmod +x modules/*.sh
 chmod +x lib/*.sh
-sudo ./setup.sh
 ```
 
 ## Antes de executar
@@ -26,6 +35,12 @@ Edite `config.conf` e revise principalmente:
 - `INSTALAR_GITHUB_DESKTOP=true`
 - `INSTALAR_EXTENSOES_VSCODE=true`
 - `DESABILITAR_BLOQUEIO_TELA=true`
+
+## Execução do script
+Para executar o script, certifique-se de que o usuário esteja logado como `root`.
+```bash
+./setup.sh
+```
 
 ## Estrutura
 
