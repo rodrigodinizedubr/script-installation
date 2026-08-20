@@ -58,7 +58,9 @@ script-installation/
 │   ├── 19-docker.sh
 │   ├── 20-githubdesktop.sh
 │   ├── 21-vscode-extensions.sh
-│   └── 22-disable-screen-lock.sh
+│   ├── 22-disable-screen-lock.sh
+│   ├── 23-gnome-favorites.sh
+│   └── 24-dash-to-dock.sh
 └── logs/
 ```
 
