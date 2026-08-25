@@ -111,14 +111,27 @@ gnome_session_available() {
 # ------------------------------------------------------------
 
 gnome_run() {
+
     gnome_session_available || return 1
 
     runuser -u "$GNOME_USER" -- env \
+        -u XDG_DATA_HOME \
+        -u XDG_DATA_DIRS \
+        -u XDG_CONFIG_HOME \
+        -u XDG_CONFIG_DIRS \
+        -u XDG_CACHE_HOME \
+        -u FLATPAK_ID \
+        -u FLATPAK_SANDBOX_DIR \
         HOME="$GNOME_HOME" \
         USER="$GNOME_USER" \
         LOGNAME="$GNOME_USER" \
         XDG_RUNTIME_DIR="$GNOME_RUNTIME_DIR" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=$GNOME_DBUS_SOCKET" \
+        XDG_DATA_HOME="$GNOME_HOME/.local/share" \
+        XDG_CONFIG_HOME="$GNOME_HOME/.config" \
+        XDG_CACHE_HOME="$GNOME_HOME/.cache" \
+        XDG_DATA_DIRS="/usr/local/share:/usr/share" \
+        XDG_CONFIG_DIRS="/etc/xdg" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=${GNOME_DBUS_SOCKET}" \
         "$@"
 }
 
