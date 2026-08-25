@@ -14,10 +14,12 @@ info "Instalando Cisco Packet Tracer"
 
 PACKET_TRACER_FILENAME="${PACKET_TRACER_FILENAME:-CiscoPacketTracer_901_Ubuntu_64bit.deb}"
 PACKET_TRACER_DRIVE_FOLDER_URL="${PACKET_TRACER_DRIVE_FOLDER_URL:-}"
+PACKET_TRACER_USER="${USUARIO:-${SUDO_USER:-}}"
 DOWNLOAD_DIR=""
 GDOWN_CMD=""
 VENV_DIR=""
 INSTALLER_PATH=""
+PACKAGE_NAME=""
 
 cleanup() {
     [ -z "$DOWNLOAD_DIR" ] || rm -rf "$DOWNLOAD_DIR"
@@ -47,8 +49,8 @@ else
         install_package gdown
         GDOWN_CMD="$(command -v gdown)"
     else
-        # Debian 12 não fornece gdown no repositório padrão. Usa um venv
-        # temporário para evitar pip --user como root e PEP 668.
+        # Em distribuições nas quais gdown não está disponível via APT,
+        # usa um venv temporário para não alterar o Python do sistema.
         info "Pacote gdown não disponível via APT; preparando ambiente Python temporário."
         install_package python3-venv
 
@@ -93,14 +95,86 @@ if ! dpkg-deb --info "$INSTALLER_PATH" >/dev/null 2>&1; then
     exit 1
 fi
 
+PACKAGE_NAME="$(dpkg-deb -f "$INSTALLER_PATH" Package 2>/dev/null || true)"
+
 info "Instalando pacote: $(basename "$INSTALLER_PATH")"
 
 # O APT instala o arquivo local e resolve suas dependências automaticamente.
-if apt install -y "$INSTALLER_PATH"; then
-    success "Cisco Packet Tracer instalado com sucesso."
-    record_component_status "INSTALADO" "Cisco Packet Tracer" "Pacote $PACKET_TRACER_FILENAME instalado"
-else
+if ! apt install -y "$INSTALLER_PATH"; then
     error "Falha ao instalar o Cisco Packet Tracer."
     record_component_status "FALHA" "Cisco Packet Tracer" "apt install retornou erro"
     exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Validação pós-instalação
+# ---------------------------------------------------------------------------
+POST_INSTALL_OK=true
+
+if [ -n "$PACKAGE_NAME" ]; then
+    if dpkg -s "$PACKAGE_NAME" >/dev/null 2>&1; then
+        success "Pacote Debian instalado e registrado: $PACKAGE_NAME"
+    else
+        error "O pacote $PACKAGE_NAME não aparece como instalado no dpkg."
+        POST_INSTALL_OK=false
+    fi
+else
+    warn "Não foi possível determinar o nome interno do pacote para validação via dpkg."
+fi
+
+if command -v packettracer >/dev/null 2>&1; then
+    PACKET_TRACER_CMD="$(command -v packettracer)"
+    success "Comando packettracer disponível: $PACKET_TRACER_CMD"
+elif [ -x /opt/pt/packettracer ]; then
+    PACKET_TRACER_CMD="/opt/pt/packettracer"
+    success "Executável do Packet Tracer encontrado: $PACKET_TRACER_CMD"
+else
+    error "O comando 'packettracer' não foi encontrado após a instalação."
+    POST_INSTALL_OK=false
+fi
+
+if [ -f /opt/pt/packettracer.AppImage ]; then
+    success "Aplicação principal encontrada: /opt/pt/packettracer.AppImage"
+elif [ -d /opt/pt ]; then
+    warn "Diretório /opt/pt existe, mas /opt/pt/packettracer.AppImage não foi encontrado."
+else
+    warn "Diretório esperado /opt/pt não foi encontrado."
+fi
+
+if [ "$POST_INSTALL_OK" != true ]; then
+    record_component_status "FALHA" "Cisco Packet Tracer" "Instalação concluída, mas a validação pós-instalação falhou"
+    exit 1
+fi
+
+success "Cisco Packet Tracer instalado e validado com sucesso."
+record_component_status "INSTALADO" "Cisco Packet Tracer" "Pacote $PACKET_TRACER_FILENAME instalado e validado"
+
+# ---------------------------------------------------------------------------
+# Primeira execução / EULA
+# ---------------------------------------------------------------------------
+echo
+info "Primeira execução do Cisco Packet Tracer"
+info "A EULA da Cisco deve ser revisada e aceita interativamente pelo usuário."
+
+if [ -n "$PACKET_TRACER_USER" ] && id "$PACKET_TRACER_USER" >/dev/null 2>&1; then
+    info "Usuário da sessão: $PACKET_TRACER_USER"
+else
+    PACKET_TRACER_USER=""
+    warn "Não foi possível determinar um usuário gráfico válido para a primeira execução."
+fi
+
+echo
+warn "Não execute o Packet Tracer como root e não use 'sudo packettracer'."
+info "Abra um terminal na sessão gráfica do usuário normal e execute:"
+echo
+echo "    packettracer"
+echo
+info "Na primeira execução será exibida a EULA."
+info "Leia os termos e escolha a opção de aceitação somente se concordar com eles."
+info "No Packet Tracer 9.0.1 atualmente instalado, a tela apresenta:"
+echo
+echo "    1) Show EULA text again"
+echo "    2) Accept EULA"
+echo "    3) Decline EULA"
+echo
+info "O script não aceita a EULA automaticamente e não inicia a interface gráfica como root."
