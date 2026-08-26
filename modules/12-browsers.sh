@@ -107,3 +107,117 @@ else
     fi
 
 fi
+
+
+# ============================================================
+# Zen Browser
+# ============================================================
+
+if [[ "${INSTALAR_ZEN_BROWSER:-false}" == "true" ]]; then
+
+    info "Instalando Zen Browser..."
+
+    # --------------------------------------------------------
+    # Flatpak
+    # --------------------------------------------------------
+
+    install_package flatpak
+
+
+    # --------------------------------------------------------
+    # Configurar Flathub
+    # --------------------------------------------------------
+
+    info "Verificando repositório Flathub..."
+
+    if flatpak remotes \
+        --system \
+        --columns=name |
+        grep -Fxq "flathub"; then
+
+        info "Flathub já está configurado."
+
+    else
+
+        info "Adicionando repositório Flathub..."
+
+        flatpak remote-add \
+            --system \
+            --if-not-exists \
+            flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+
+    fi
+
+
+    # --------------------------------------------------------
+    # Instalar Zen
+    # --------------------------------------------------------
+
+    if flatpak info \
+        --system \
+        app.zen_browser.zen \
+        >/dev/null 2>&1; then
+
+        info "Zen Browser já está instalado."
+
+    else
+
+        info "Instalando Zen Browser via Flathub..."
+
+        flatpak install \
+            --system \
+            -y \
+            flathub \
+            app.zen_browser.zen
+
+    fi
+
+
+    # --------------------------------------------------------
+    # Validar
+    # --------------------------------------------------------
+
+    if flatpak info \
+        --system \
+        app.zen_browser.zen \
+        >/dev/null 2>&1; then
+
+        ZEN_VERSION="$(
+            flatpak info \
+                --system \
+                --show-version \
+                app.zen_browser.zen \
+                2>/dev/null ||
+                true
+        )"
+
+        success "Zen Browser instalado com sucesso."
+
+        if [[ -n "$ZEN_VERSION" ]]; then
+            info "Versão: $ZEN_VERSION"
+        fi
+
+        record_component_status \
+            "Zen Browser" \
+            "OK" \
+            "Zen Browser ${ZEN_VERSION:-instalado}"
+
+    else
+
+        error "Zen Browser não foi localizado após a instalação."
+
+        record_component_status \
+            "Zen Browser" \
+            "FAIL" \
+            "Flatpak não localizado"
+
+        exit 1
+
+    fi
+
+else
+
+    info "Zen Browser desabilitado (INSTALAR_ZEN_BROWSER=false)."
+
+fi
