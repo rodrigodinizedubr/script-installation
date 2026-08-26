@@ -16,7 +16,8 @@
 #   - verificar chaves;
 #   - ler/aplicar/resetar valores;
 #   - validar doubles com tolerância;
-#   - habilitar/desabilitar extensões GNOME.
+#   - habilitar/desabilitar extensões GNOME;
+#   - fornecer funções de diagnóstico.
 #
 # ============================================================
 
@@ -87,6 +88,10 @@ gnome_detect_user() {
     # --------------------------------------------------------
     # Prioridade 1:
     # usuário definido no config.conf
+    #
+    # Exemplo:
+    #
+    #   USUARIO="operador"
     # --------------------------------------------------------
 
     if [[ -n "${USUARIO:-}" &&
@@ -117,7 +122,7 @@ gnome_detect_user() {
 
     # --------------------------------------------------------
     # Prioridade 3:
-    # procurar sessão gráfica ativa
+    # sessão gráfica ativa via loginctl
     # --------------------------------------------------------
 
     if [[ -z "$detected_user" ]] &&
@@ -234,6 +239,7 @@ gnome_detect_user() {
     # --------------------------------------------------------
 
     GNOME_RUNTIME_DIR="/run/user/${GNOME_UID}"
+
     GNOME_DBUS_SOCKET="${GNOME_RUNTIME_DIR}/bus"
 
 
@@ -301,6 +307,13 @@ gnome_run() {
     gnome_session_available || return 1
 
 
+    # --------------------------------------------------------
+    # O setup.sh normalmente roda como root.
+    #
+    # Limpamos variáveis XDG herdadas do root e reconstruímos
+    # o ambiente do usuário gráfico.
+    # --------------------------------------------------------
+
     runuser -u "$GNOME_USER" -- env \
         -u XDG_DATA_HOME \
         -u XDG_DATA_DIRS \
@@ -363,6 +376,14 @@ gnome_extensions() {
 
 # ============================================================
 # 8. Obter nome-base de um schema
+#
+# Exemplo:
+#
+#   org.example.Schema:/algum/path/
+#
+# retorna:
+#
+#   org.example.Schema
 # ============================================================
 
 gnome_schema_base_name() {
@@ -382,13 +403,16 @@ gnome_schema_base_name() {
 #
 #     org.gnome.shell
 #
-#   Schema relocatable:
+#   Schema relocatable completo:
 #
-#     org.example.Schema:/caminho/
+#     org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:
+#     /org/gnome/settings-daemon/plugins/media-keys/
+#     custom-keybindings/flameshot/
 #
-# Para schemas relocatable completos, a validação mais
-# confiável é tentar acessar diretamente a instância através
-# de "gsettings list-keys".
+# Para schemas relocatable completos fazemos exatamente o teste
+# que já foi comprovado funcionar no sistema:
+#
+#   gsettings list-keys schema:/path/
 # ============================================================
 
 gnome_schema_exists() {
@@ -407,15 +431,9 @@ gnome_schema_exists() {
 
     # --------------------------------------------------------
     # Schema relocatable completo
-    #
-    # Exemplo:
-    #
-    # org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:
-    # /org/gnome/settings-daemon/plugins/media-keys/
-    # custom-keybindings/flameshot/
     # --------------------------------------------------------
 
-    if [[ "$schema" == *:* ]]; then
+    if [[ "$schema" == *":/"* ]]; then
 
         if gnome_gsettings \
             list-keys \
@@ -446,7 +464,7 @@ gnome_schema_exists() {
 
 
     # --------------------------------------------------------
-    # Schema relocatable informado somente pelo nome-base
+    # Nome-base de schema relocatable
     # --------------------------------------------------------
 
     if gnome_gsettings \
@@ -466,13 +484,14 @@ gnome_schema_exists() {
 # ============================================================
 # 10. Verificar existência de chave
 #
-# Para schemas relocatable deve ser usado o schema COMPLETO.
+# Para schemas relocatable, usar o schema COMPLETO.
 # ============================================================
 
 gnome_key_exists() {
 
     local schema="$1"
     local key="$2"
+
 
     if [[ -z "$schema" ||
           -z "$key" ]]; then
@@ -503,7 +522,12 @@ gnome_is_number() {
 
 
 # ============================================================
-# 12. Comparar valores numéricos com tolerância
+# 12. Comparar números com tolerância
+#
+# Necessário para valores como:
+#
+#   esperado: 0.72
+#   obtido:   0.71999999999999997
 # ============================================================
 
 gnome_numeric_equal() {
@@ -598,16 +622,38 @@ gnome_gsettings_set() {
 
     # --------------------------------------------------------
     # Validar schema
+    #
+    # Para relocatable fazemos validação direta da instância.
     # --------------------------------------------------------
 
-    if ! gnome_schema_exists "$schema"; then
+    if [[ "$schema" == *":/"* ]]; then
 
-        _gnome_error \
-            "Schema GNOME não encontrado:"
+        if ! gnome_gsettings \
+            list-keys \
+            "$schema" \
+            >/dev/null 2>&1; then
 
-        echo "       $schema" >&2
+            _gnome_error \
+                "Schema relocatable inacessível:"
 
-        return 1
+            echo "       $schema" >&2
+
+            return 1
+
+        fi
+
+    else
+
+        if ! gnome_schema_exists "$schema"; then
+
+            _gnome_error \
+                "Schema GNOME não encontrado:"
+
+            echo "       $schema" >&2
+
+            return 1
+
+        fi
 
     fi
 
@@ -668,7 +714,7 @@ gnome_gsettings_set() {
 
 
     # --------------------------------------------------------
-    # Validar números
+    # Validar numérico
     # --------------------------------------------------------
 
     if gnome_is_number "$value" &&
@@ -744,12 +790,30 @@ gnome_gsettings_reset() {
     fi
 
 
-    if ! gnome_schema_exists "$schema"; then
+    if [[ "$schema" == *":/"* ]]; then
 
-        _gnome_error \
-            "Schema GNOME não encontrado: ${schema}"
+        if ! gnome_gsettings \
+            list-keys \
+            "$schema" \
+            >/dev/null 2>&1; then
 
-        return 1
+            _gnome_error \
+                "Schema relocatable inacessível: ${schema}"
+
+            return 1
+
+        fi
+
+    else
+
+        if ! gnome_schema_exists "$schema"; then
+
+            _gnome_error \
+                "Schema GNOME não encontrado: ${schema}"
+
+            return 1
+
+        fi
 
     fi
 
@@ -899,7 +963,7 @@ gnome_extension_enable() {
 
 
 # ============================================================
-# 19. Desabilitar extensão
+# 19. Desabilitar extensão GNOME
 # ============================================================
 
 gnome_extension_disable() {
@@ -1156,7 +1220,103 @@ gnome_test_schema() {
 
 
 # ============================================================
-# 24. Fim
+# 24. Detectar tipo da sessão
+# ============================================================
+
+gnome_session_type() {
+
+    if [[ -z "${GNOME_USER:-}" ]]; then
+        gnome_detect_user || return 1
+    fi
+
+
+    local session_id=""
+
+    session_id="$(
+        loginctl list-sessions \
+            --no-legend \
+            2>/dev/null |
+        awk \
+            -v user="$GNOME_USER" \
+            '$3 == user {print $1; exit}'
+    )"
+
+
+    if [[ -n "$session_id" ]]; then
+
+        loginctl show-session \
+            "$session_id" \
+            -p Type \
+            --value \
+            2>/dev/null
+
+        return $?
+    fi
+
+
+    gnome_run \
+        sh \
+        -c 'printf "%s\n" "${XDG_SESSION_TYPE:-}"'
+}
+
+
+# ============================================================
+# 25. Testar schema relocatable completo
+# ============================================================
+
+gnome_test_relocatable_schema() {
+
+    local schema="$1"
+
+
+    if [[ -z "$schema" ]]; then
+
+        _gnome_error \
+            "Schema relocatable não informado."
+
+        return 1
+
+    fi
+
+
+    if [[ "$schema" != *":/"* ]]; then
+
+        _gnome_error \
+            "O schema informado não contém um path relocatable."
+
+        return 1
+
+    fi
+
+
+    _gnome_info \
+        "Testando schema relocatable:"
+
+
+    echo "  $schema"
+
+
+    if gnome_gsettings \
+        list-keys \
+        "$schema"; then
+
+        _gnome_success \
+            "Schema relocatable acessível."
+
+        return 0
+
+    fi
+
+
+    _gnome_error \
+        "Schema relocatable inacessível."
+
+    return 1
+}
+
+
+# ============================================================
+# 26. Fim da biblioteca
 # ============================================================
 
 return 0 2>/dev/null || true
