@@ -4,31 +4,60 @@
 # Instalação do VirtualBox Guest Additions
 #
 # Este módulo:
+#   - verifica se a máquina está rodando no VirtualBox;
 #   - instala dependências de compilação;
 #   - localiza a mídia do Guest Additions;
-#   - executa VBoxLinuxAdditions.run;
-#   - interpreta corretamente os códigos de retorno;
-#   - valida a instalação;
+#   - executa VBoxLinuxAdditions.run diretamente via shell;
+#   - trata corretamente códigos de retorno 0 e 2;
+#   - verifica VBoxClient, módulos e serviços;
 #   - informa quando uma reinicialização é necessária.
+#
+# IMPORTANTE:
+#
+# A mídia do Guest Additions normalmente é uma ISO/CD-ROM
+# montada como somente leitura.
+#
+# Portanto, NÃO deve ser executado:
+#
+#   chmod +x VBoxLinuxAdditions.run
+#
+# O instalador é chamado diretamente com:
+#
+#   sh VBoxLinuxAdditions.run
+#
 # ============================================================
 
 set -e
 
-# ------------------------------------------------------------
-# Diretórios do projeto
-# ------------------------------------------------------------
+
+# ============================================================
+# 1. Diretórios do projeto
+# ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# ------------------------------------------------------------
-# Bibliotecas
-# ------------------------------------------------------------
+
+# ============================================================
+# 2. Bibliotecas
+# ============================================================
 
 source "${ROOT_DIR}/lib/common.sh"
 source "${ROOT_DIR}/lib/logging.sh"
 
+
+# ============================================================
+# 3. Identificação
+# ============================================================
+
 COMPONENT_NAME="VirtualBox Guest Additions"
+
+REBOOT_REQUIRED=false
+MOUNT_CREATED_BY_SCRIPT=false
+
+VBOX_MOUNT=""
+VBOX_INSTALLER=""
+
 
 echo
 echo "============================================================"
@@ -38,7 +67,31 @@ echo
 
 
 # ============================================================
-# 1. Verificar se estamos dentro do VirtualBox
+# 4. Verificar se estamos executando como root
+# ============================================================
+
+if [[ "$EUID" -ne 0 ]]; then
+
+    error "Este módulo precisa ser executado como root."
+
+    echo
+    error "Execute:"
+    echo
+    echo "    sudo bash modules/05-guest-additions.sh"
+    echo
+
+    record_component_status \
+        "$COMPONENT_NAME" \
+        "FAIL" \
+        "Execução sem privilégios de root"
+
+    exit 1
+
+fi
+
+
+# ============================================================
+# 5. Verificar ambiente de virtualização
 # ============================================================
 
 info "Verificando ambiente de virtualização..."
@@ -46,20 +99,32 @@ info "Verificando ambiente de virtualização..."
 VIRTUALIZATION=""
 
 if command -v systemd-detect-virt >/dev/null 2>&1; then
-    VIRTUALIZATION="$(systemd-detect-virt 2>/dev/null || true)"
+
+    VIRTUALIZATION="$(
+        systemd-detect-virt 2>/dev/null ||
+        true
+    )"
+
 fi
 
-if [[ "$VIRTUALIZATION" != "oracle" ]]; then
 
-    warn "VirtualBox não foi detectado pelo systemd-detect-virt."
+if [[ "$VIRTUALIZATION" == "oracle" ]]; then
 
+    success "VirtualBox detectado."
+
+else
+
+    # --------------------------------------------------------
     # Segunda tentativa usando DMI
-    if grep -qiE "VirtualBox|innotek|Oracle" \
+    # --------------------------------------------------------
+
+    if grep -qiE \
+        "VirtualBox|innotek|Oracle" \
         /sys/class/dmi/id/product_name \
         /sys/class/dmi/id/sys_vendor \
         2>/dev/null; then
 
-        info "VirtualBox detectado através das informações DMI."
+        success "VirtualBox detectado através das informações DMI."
 
     else
 
@@ -75,96 +140,173 @@ if [[ "$VIRTUALIZATION" != "oracle" ]]; then
 
     fi
 
-else
-
-    info "VirtualBox detectado."
-
 fi
 
 
 # ============================================================
-# 2. Instalar dependências necessárias
+# 6. Exibir kernel em execução
+# ============================================================
+
+CURRENT_KERNEL="$(uname -r)"
+
+info "Kernel em execução:"
+info "$CURRENT_KERNEL"
+
+
+# ============================================================
+# 7. Instalar dependências
 # ============================================================
 
 info "Instalando dependências necessárias..."
 
 install_package build-essential
 install_package dkms
-install_package linux-headers-$(uname -r)
-
-# Algumas versões também utilizam estes pacotes
 install_package perl
+
+
+# ------------------------------------------------------------
+# Headers correspondentes ao kernel atual
+# ------------------------------------------------------------
+
+KERNEL_HEADERS="linux-headers-${CURRENT_KERNEL}"
+
+info "Verificando headers do kernel:"
+info "$KERNEL_HEADERS"
+
+if apt-cache show "$KERNEL_HEADERS" >/dev/null 2>&1; then
+
+    install_package "$KERNEL_HEADERS"
+
+else
+
+    error "Headers correspondentes ao kernel atual não foram encontrados:"
+    error "$KERNEL_HEADERS"
+
+    echo
+    error "Kernel atual:"
+    error "$CURRENT_KERNEL"
+
+    record_component_status \
+        "$COMPONENT_NAME" \
+        "FAIL" \
+        "Headers do kernel não encontrados"
+
+    exit 1
+
+fi
+
 
 success "Dependências instaladas."
 
 
 # ============================================================
-# 3. Verificar mídia do Guest Additions
+# 8. Procurar mídia já montada
 # ============================================================
 
 info "Localizando mídia do VirtualBox Guest Additions..."
 
-VBOX_MOUNT=""
-
 POSSIBLE_MOUNTS=(
     "/media/cdrom"
     "/media/cdrom0"
-    "/mnt"
+    "/mnt/cdrom"
+    "/mnt/vboxadditions"
 )
 
-# Adicionar mounts dentro de /media/<usuario>
-for path in /media/*/VBox_GAs_*; do
-    [[ -d "$path" ]] && POSSIBLE_MOUNTS+=("$path")
-done
+
+# ------------------------------------------------------------
+# Diretórios VBox_GAs_* conhecidos
+# ------------------------------------------------------------
 
 for path in /media/VBox_GAs_*; do
-    [[ -d "$path" ]] && POSSIBLE_MOUNTS+=("$path")
+
+    if [[ -d "$path" ]]; then
+        POSSIBLE_MOUNTS+=("$path")
+    fi
+
+done
+
+
+for path in /media/*/VBox_GAs_*; do
+
+    if [[ -d "$path" ]]; then
+        POSSIBLE_MOUNTS+=("$path")
+    fi
+
 done
 
 
 # ------------------------------------------------------------
-# Procurar VBoxLinuxAdditions.run
+# Procurar instalador
 # ------------------------------------------------------------
 
 for mount_point in "${POSSIBLE_MOUNTS[@]}"; do
 
     if [[ -f "${mount_point}/VBoxLinuxAdditions.run" ]]; then
+
         VBOX_MOUNT="$mount_point"
+        VBOX_INSTALLER="${mount_point}/VBoxLinuxAdditions.run"
+
         break
+
     fi
 
 done
 
 
 # ============================================================
-# 4. Tentar montar o CD caso ainda não tenha sido encontrado
+# 9. Caso não esteja montado, tentar montar a unidade óptica
 # ============================================================
 
-if [[ -z "$VBOX_MOUNT" ]]; then
+if [[ -z "$VBOX_INSTALLER" ]]; then
 
     info "Mídia ainda não localizada."
-    info "Tentando montar o CD do Guest Additions..."
+    info "Tentando montar a unidade óptica..."
 
     mkdir -p /mnt/vboxadditions
 
     DEVICE=""
 
-    # Procurar unidade óptica
-    for candidate in /dev/sr0 /dev/cdrom /dev/dvd; do
+    for candidate in \
+        /dev/sr0 \
+        /dev/cdrom \
+        /dev/dvd; do
 
         if [[ -e "$candidate" ]]; then
+
             DEVICE="$candidate"
             break
+
         fi
 
     done
 
+
     if [[ -n "$DEVICE" ]]; then
 
-        mount "$DEVICE" /mnt/vboxadditions 2>/dev/null || true
+        info "Unidade óptica localizada:"
+        info "$DEVICE"
+
+
+        if mount "$DEVICE" /mnt/vboxadditions 2>/dev/null; then
+
+            MOUNT_CREATED_BY_SCRIPT=true
+
+        else
+
+            # ------------------------------------------------
+            # Pode já estar montado.
+            # ------------------------------------------------
+
+            info "A unidade pode já estar montada."
+
+        fi
+
 
         if [[ -f /mnt/vboxadditions/VBoxLinuxAdditions.run ]]; then
+
             VBOX_MOUNT="/mnt/vboxadditions"
+            VBOX_INSTALLER="/mnt/vboxadditions/VBoxLinuxAdditions.run"
+
         fi
 
     fi
@@ -173,18 +315,22 @@ fi
 
 
 # ============================================================
-# 5. Validar mídia
+# 10. Validar mídia
 # ============================================================
 
-if [[ -z "$VBOX_MOUNT" ]]; then
+if [[ -z "$VBOX_INSTALLER" ||
+      ! -f "$VBOX_INSTALLER" ]]; then
 
     error "Não foi possível localizar VBoxLinuxAdditions.run."
 
     echo
-    error "No VirtualBox, selecione:"
-    error "Dispositivos -> Inserir imagem de CD dos Adicionais para Convidado"
+    error "No menu da máquina virtual VirtualBox, selecione:"
     echo
-    error "Depois execute novamente este módulo."
+    error "    Dispositivos"
+    error "        -> Inserir imagem de CD dos Adicionais para Convidado"
+    echo
+    error "Depois execute este módulo novamente."
+    echo
 
     record_component_status \
         "$COMPONENT_NAME" \
@@ -196,9 +342,7 @@ if [[ -z "$VBOX_MOUNT" ]]; then
 fi
 
 
-VBOX_INSTALLER="${VBOX_MOUNT}/VBoxLinuxAdditions.run"
-
-info "Mídia localizada:"
+success "Mídia localizada:"
 info "$VBOX_MOUNT"
 
 info "Instalador:"
@@ -206,30 +350,48 @@ info "$VBOX_INSTALLER"
 
 
 # ============================================================
-# 6. Tornar instalador executável
+# 11. NÃO alterar permissões do instalador
 # ============================================================
 
-chmod +x "$VBOX_INSTALLER"
+# ------------------------------------------------------------
+# NÃO usar:
+#
+#   chmod +x "$VBOX_INSTALLER"
+#
+# A ISO do Guest Additions é normalmente montada como
+# somente leitura.
+#
+# O shell consegue executar o arquivo diretamente:
+#
+#   sh "$VBOX_INSTALLER"
+# ------------------------------------------------------------
 
 
 # ============================================================
-# 7. Executar instalador
+# 12. Executar instalador
 # ============================================================
 
 echo
 info "Executando VBoxLinuxAdditions.run..."
 echo
 
-# O instalador da Oracle utiliza códigos de retorno próprios.
+
+# ------------------------------------------------------------
+# O instalador da Oracle possui códigos próprios.
 #
-# Código 0:
-#   instalação concluída e módulos carregados.
+# 0:
+#   instalação concluída normalmente.
 #
-# Código 2:
-#   instalação concluída, porém os módulos atualmente carregados
-#   não puderam ser substituídos nesta sessão.
+# 2:
+#   instalação concluída, porém módulos antigos continuam
+#   carregados e será necessário reiniciar a VM.
 #
-# Neste caso, reiniciar a VM normalmente resolve.
+# Outros valores:
+#   falha real.
+#
+# Como o script global utiliza "set -e", desabilitamos
+# temporariamente essa opção para interpretar o retorno.
+# ------------------------------------------------------------
 
 set +e
 
@@ -240,11 +402,14 @@ VBOX_EXIT_CODE=$?
 set -e
 
 
-# ============================================================
-# 8. Interpretar resultado
-# ============================================================
+echo
+info "Código retornado por VBoxLinuxAdditions.run:"
+info "$VBOX_EXIT_CODE"
 
-REBOOT_REQUIRED=false
+
+# ============================================================
+# 13. Interpretar código de retorno
+# ============================================================
 
 case "$VBOX_EXIT_CODE" in
 
@@ -254,51 +419,70 @@ case "$VBOX_EXIT_CODE" in
 
         ;;
 
+
     2)
 
         warn "VirtualBox Guest Additions foi instalado,"
-        warn "mas os módulos carregados atualmente não puderam"
+        warn "mas os módulos atualmente carregados não puderam"
         warn "ser substituídos nesta sessão."
 
         echo
 
-        warn "Isso pode acontecer quando módulos antigos do"
-        warn "VirtualBox ainda estão em uso."
+        warn "Isso pode acontecer quando módulos antigos"
+        warn "do VirtualBox ainda estão em uso."
 
         echo
 
         warn "Será necessário reiniciar a máquina virtual"
-        warn "para carregar os novos módulos."
+        warn "para carregar os módulos recém-instalados."
 
         REBOOT_REQUIRED=true
 
         ;;
 
+
     *)
 
         error "Falha durante a instalação do Guest Additions."
-        error "Código retornado pelo instalador: ${VBOX_EXIT_CODE}"
+
+        error \
+            "VBoxLinuxAdditions.run retornou código ${VBOX_EXIT_CODE}."
+
+        echo
+
 
         if [[ -f /var/log/vboxadd-install.log ]]; then
 
-            echo
-            error "Consulte o log:"
+            error "Consulte:"
             error "/var/log/vboxadd-install.log"
 
         fi
 
+
         if [[ -f /var/log/vboxadd-setup.log ]]; then
 
-            echo
             error "Consulte também:"
             error "/var/log/vboxadd-setup.log"
 
         fi
 
+
         record_component_status \
             "$COMPONENT_NAME" \
             "FAIL" \
             "VBoxLinuxAdditions.run retornou ${VBOX_EXIT_CODE}"
+
+        # ----------------------------------------------------
+        # Desmontar somente se este script fez a montagem
+        # ----------------------------------------------------
+
+        if [[ "$MOUNT_CREATED_BY_SCRIPT" == true ]]; then
+
+            umount /mnt/vboxadditions \
+                2>/dev/null ||
+                true
+
+        fi
 
         exit "$VBOX_EXIT_CODE"
 
@@ -308,7 +492,7 @@ esac
 
 
 # ============================================================
-# 9. Verificar VBoxClient
+# 14. Verificar VBoxClient
 # ============================================================
 
 echo
@@ -321,6 +505,20 @@ if command -v VBoxClient >/dev/null 2>&1; then
     success "VBoxClient encontrado:"
     info "$VBOXCLIENT_PATH"
 
+
+    VBOXCLIENT_VERSION="$(
+        VBoxClient --version \
+        2>/dev/null ||
+        true
+    )"
+
+    if [[ -n "$VBOXCLIENT_VERSION" ]]; then
+
+        info "Versão:"
+        info "$VBOXCLIENT_VERSION"
+
+    fi
+
 else
 
     warn "VBoxClient não foi encontrado no PATH."
@@ -329,34 +527,43 @@ fi
 
 
 # ============================================================
-# 10. Verificar módulos instalados
+# 15. Verificar módulos instalados
 # ============================================================
 
 echo
 info "Verificando módulos do VirtualBox..."
 
-MODULES_FOUND=false
-
-for module in vboxguest vboxsf vboxvideo; do
+for module in \
+    vboxguest \
+    vboxsf \
+    vboxvideo; do
 
     if modinfo "$module" >/dev/null 2>&1; then
 
-        VERSION="$(
-            modinfo -F version "$module" 2>/dev/null |
+        MODULE_VERSION="$(
+            modinfo \
+                -F version \
+                "$module" \
+                2>/dev/null |
             head -n 1
         )"
 
-        if [[ -n "$VERSION" ]]; then
-            success "${module}: ${VERSION}"
-        else
-            success "${module}: instalado"
-        fi
+        if [[ -n "$MODULE_VERSION" ]]; then
 
-        MODULES_FOUND=true
+            success \
+                "${module}: ${MODULE_VERSION}"
+
+        else
+
+            success \
+                "${module}: instalado"
+
+        fi
 
     else
 
-        warn "Módulo ${module} não encontrado."
+        warn \
+            "Módulo ${module} não encontrado."
 
     fi
 
@@ -364,11 +571,11 @@ done
 
 
 # ============================================================
-# 11. Verificar módulos carregados
+# 16. Verificar módulos atualmente carregados
 # ============================================================
 
 echo
-info "Módulos atualmente carregados:"
+info "Verificando módulos VirtualBox carregados..."
 
 LOADED_MODULES="$(
     lsmod |
@@ -376,21 +583,28 @@ LOADED_MODULES="$(
     sort
 )"
 
+
 if [[ -n "$LOADED_MODULES" ]]; then
 
     while read -r module; do
+
+        [[ -z "$module" ]] && continue
+
         info "$module"
+
     done <<< "$LOADED_MODULES"
 
 else
 
-    warn "Nenhum módulo vbox está carregado atualmente."
+    warn "Nenhum módulo VirtualBox está carregado atualmente."
+
+    REBOOT_REQUIRED=true
 
 fi
 
 
 # ============================================================
-# 12. Verificar serviço rcvboxadd
+# 17. Verificar rcvboxadd
 # ============================================================
 
 if command -v rcvboxadd >/dev/null 2>&1; then
@@ -406,16 +620,42 @@ if command -v rcvboxadd >/dev/null 2>&1; then
 
     set -e
 
+
     if [[ "$STATUS_KERNEL" -eq 0 ]]; then
 
         success "Drivers Guest Additions estão ativos."
 
     else
 
-        warn "Os drivers ainda não estão completamente ativos."
-        warn "Uma reinicialização pode ser necessária."
+        warn "Os drivers Guest Additions ainda não estão"
+        warn "completamente ativos."
 
         REBOOT_REQUIRED=true
+
+    fi
+
+
+    # --------------------------------------------------------
+    # Serviço de usuário
+    # --------------------------------------------------------
+
+    set +e
+
+    rcvboxadd status-user >/dev/null 2>&1
+
+    STATUS_USER=$?
+
+    set -e
+
+
+    if [[ "$STATUS_USER" -eq 0 ]]; then
+
+        success "Serviços de usuário Guest Additions estão ativos."
+
+    else
+
+        warn "Serviços de usuário Guest Additions"
+        warn "ainda não estão completamente ativos."
 
     fi
 
@@ -423,21 +663,69 @@ fi
 
 
 # ============================================================
-# 13. Verificar compartilhamento de pastas
+# 18. Verificar suporte a pastas compartilhadas
 # ============================================================
 
 echo
-info "Verificando suporte ao módulo vboxsf..."
+info "Verificando suporte a pastas compartilhadas..."
 
 if modinfo vboxsf >/dev/null 2>&1; then
-    success "Suporte a pastas compartilhadas disponível."
+
+    success "Módulo vboxsf disponível."
+
 else
+
     warn "Módulo vboxsf não encontrado."
+
+    REBOOT_REQUIRED=true
+
 fi
 
 
 # ============================================================
-# 14. Registrar resultado
+# 19. Verificar diretório de instalação
+# ============================================================
+
+if [[ -d /opt/VBoxGuestAdditions-* ]]; then
+
+    info "Diretório Guest Additions localizado:"
+
+    find /opt \
+        -maxdepth 1 \
+        -type d \
+        -name 'VBoxGuestAdditions-*' \
+        -print |
+    while read -r directory; do
+
+        info "$directory"
+
+    done
+
+fi
+
+
+# ============================================================
+# 20. Desmontar mídia somente se o script a montou
+# ============================================================
+
+if [[ "$MOUNT_CREATED_BY_SCRIPT" == true ]]; then
+
+    echo
+    info "Desmontando mídia temporária..."
+
+    if mountpoint -q /mnt/vboxadditions 2>/dev/null; then
+
+        umount /mnt/vboxadditions \
+            2>/dev/null ||
+            true
+
+    fi
+
+fi
+
+
+# ============================================================
+# 21. Resultado
 # ============================================================
 
 echo
@@ -446,16 +734,22 @@ echo " VirtualBox Guest Additions"
 echo "============================================================"
 echo
 
+
 if [[ "$REBOOT_REQUIRED" == true ]]; then
 
-    warn "Instalação concluída."
-    warn "É necessário reiniciar a máquina virtual."
+    success "Instalação do Guest Additions concluída."
 
     echo
-    echo "Execute:"
+
+    warn "É necessário reiniciar a máquina virtual"
+    warn "para carregar completamente os novos módulos."
+
     echo
-    echo "    reboot"
+    info "Depois que o setup terminar, execute:"
     echo
+    echo "    sudo reboot"
+    echo
+
 
     record_component_status \
         "$COMPONENT_NAME" \
@@ -475,17 +769,8 @@ fi
 
 
 # ============================================================
-# 15. Desmontar mídia montada pelo script
+# 22. Finalização
 # ============================================================
-
-if mountpoint -q /mnt/vboxadditions 2>/dev/null; then
-
-    info "Desmontando mídia temporária..."
-
-    umount /mnt/vboxadditions 2>/dev/null || true
-
-fi
-
 
 success "Módulo Guest Additions finalizado."
 
