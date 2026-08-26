@@ -362,20 +362,86 @@ gnome_extensions() {
 # 7. Verificar existência de schema
 # ============================================================
 
+# ============================================================
+# Verificar existência de schema
+#
+# Suporta:
+#
+#   Schema normal:
+#
+#     org.gnome.shell
+#
+#   Schema relocatable:
+#
+#     org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:
+#     /org/gnome/settings-daemon/plugins/media-keys/
+#     custom-keybindings/flameshot/
+#
+# ============================================================
+
 gnome_schema_exists() {
 
     local schema="$1"
 
     if [[ -z "$schema" ]]; then
 
-        echo "[ERRO] Schema não informado." >&2
+        _gnome_error "Schema não informado."
 
         return 1
 
     fi
 
-    gnome_gsettings list-schemas |
-        grep -Fxq "$schema"
+
+    # --------------------------------------------------------
+    # Remover path de schemas relocatable
+    #
+    # Exemplo:
+    #
+    # Entrada:
+    #
+    # org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:
+    # /org/gnome/settings-daemon/plugins/media-keys/
+    # custom-keybindings/flameshot/
+    #
+    # Resultado:
+    #
+    # org.gnome.settings-daemon.plugins.media-keys.custom-keybinding
+    # --------------------------------------------------------
+
+    local base_schema
+
+    base_schema="${schema%%:*}"
+
+
+    # --------------------------------------------------------
+    # Schema normal
+    # --------------------------------------------------------
+
+    if gnome_gsettings \
+        list-schemas \
+        2>/dev/null |
+        grep -Fxq "$base_schema"; then
+
+        return 0
+
+    fi
+
+
+    # --------------------------------------------------------
+    # Schema relocatable
+    # --------------------------------------------------------
+
+    if gnome_gsettings \
+        list-relocatable-schemas \
+        2>/dev/null |
+        grep -Fxq "$base_schema"; then
+
+        return 0
+
+    fi
+
+
+    return 1
 }
 
 
