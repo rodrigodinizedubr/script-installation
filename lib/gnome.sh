@@ -6,7 +6,7 @@
 # Responsabilidades:
 #
 #   - identificar o usuário gráfico;
-#   - localizar UID, HOME, runtime e D-Bus;
+#   - localizar UID, GID, HOME, runtime e D-Bus;
 #   - executar comandos no contexto correto do usuário;
 #   - impedir vazamento de variáveis XDG do root;
 #   - executar gsettings;
@@ -17,14 +17,6 @@
 #   - ler/aplicar/resetar valores;
 #   - validar doubles com tolerância;
 #   - habilitar/desabilitar extensões GNOME.
-#
-# Utilizado por módulos como:
-#
-#   22-disable-screen-lock.sh
-#   24-dash-to-dock.sh
-#   25-flameshot.sh
-#   25-tilix-config.sh
-#   28-gnome-favorites.sh
 #
 # ============================================================
 
@@ -95,10 +87,6 @@ gnome_detect_user() {
     # --------------------------------------------------------
     # Prioridade 1:
     # usuário definido no config.conf
-    #
-    # Exemplo:
-    #
-    #   USUARIO="operador"
     # --------------------------------------------------------
 
     if [[ -n "${USUARIO:-}" &&
@@ -246,7 +234,6 @@ gnome_detect_user() {
     # --------------------------------------------------------
 
     GNOME_RUNTIME_DIR="/run/user/${GNOME_UID}"
-
     GNOME_DBUS_SOCKET="${GNOME_RUNTIME_DIR}/bus"
 
 
@@ -314,15 +301,6 @@ gnome_run() {
     gnome_session_available || return 1
 
 
-    # --------------------------------------------------------
-    # O setup.sh normalmente roda como root.
-    #
-    # Limpamos variáveis XDG herdadas para evitar mensagens
-    # como:
-    #
-    # /root/.local/share/flatpak/... permissão negada
-    # --------------------------------------------------------
-
     runuser -u "$GNOME_USER" -- env \
         -u XDG_DATA_HOME \
         -u XDG_DATA_DIRS \
@@ -385,22 +363,6 @@ gnome_extensions() {
 
 # ============================================================
 # 8. Obter nome-base de um schema
-#
-# Exemplos:
-#
-#   org.gnome.shell
-#
-# permanece:
-#
-#   org.gnome.shell
-#
-# Já:
-#
-#   org.example.Schema:/caminho/
-#
-# retorna:
-#
-#   org.example.Schema
 # ============================================================
 
 gnome_schema_base_name() {
@@ -416,15 +378,17 @@ gnome_schema_base_name() {
 #
 # Suporta:
 #
-# Schema normal:
+#   Schema normal:
 #
-#   org.gnome.shell
+#     org.gnome.shell
 #
-# Schema relocatable:
+#   Schema relocatable:
 #
-#   org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:
-#   /org/gnome/settings-daemon/plugins/media-keys/
-#   custom-keybindings/flameshot/
+#     org.example.Schema:/caminho/
+#
+# Para schemas relocatable completos, a validação mais
+# confiável é tentar acessar diretamente a instância através
+# de "gsettings list-keys".
 # ============================================================
 
 gnome_schema_exists() {
@@ -441,11 +405,30 @@ gnome_schema_exists() {
     fi
 
 
-    local base_schema
+    # --------------------------------------------------------
+    # Schema relocatable completo
+    #
+    # Exemplo:
+    #
+    # org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:
+    # /org/gnome/settings-daemon/plugins/media-keys/
+    # custom-keybindings/flameshot/
+    # --------------------------------------------------------
 
-    base_schema="$(
-        gnome_schema_base_name "$schema"
-    )"
+    if [[ "$schema" == *:* ]]; then
+
+        if gnome_gsettings \
+            list-keys \
+            "$schema" \
+            >/dev/null 2>&1; then
+
+            return 0
+
+        fi
+
+        return 1
+
+    fi
 
 
     # --------------------------------------------------------
@@ -455,7 +438,7 @@ gnome_schema_exists() {
     if gnome_gsettings \
         list-schemas \
         2>/dev/null |
-        grep -Fxq "$base_schema"; then
+        grep -Fxq "$schema"; then
 
         return 0
 
@@ -463,13 +446,13 @@ gnome_schema_exists() {
 
 
     # --------------------------------------------------------
-    # Schema relocatable
+    # Schema relocatable informado somente pelo nome-base
     # --------------------------------------------------------
 
     if gnome_gsettings \
         list-relocatable-schemas \
         2>/dev/null |
-        grep -Fxq "$base_schema"; then
+        grep -Fxq "$schema"; then
 
         return 0
 
@@ -483,11 +466,7 @@ gnome_schema_exists() {
 # ============================================================
 # 10. Verificar existência de chave
 #
-# IMPORTANTE:
-#
-# Para schema relocatable usamos o schema COMPLETO:
-#
-#   schema:/path/
+# Para schemas relocatable deve ser usado o schema COMPLETO.
 # ============================================================
 
 gnome_key_exists() {
@@ -513,15 +492,6 @@ gnome_key_exists() {
 
 # ============================================================
 # 11. Verificar se valor é numérico
-#
-# Aceita:
-#
-#   0
-#   32
-#   -32
-#   0.72
-#   1.0
-#   1e-5
 # ============================================================
 
 gnome_is_number() {
@@ -534,14 +504,6 @@ gnome_is_number() {
 
 # ============================================================
 # 12. Comparar valores numéricos com tolerância
-#
-# Necessário porque:
-#
-#   0.72
-#
-# pode ser retornado por GSettings como:
-#
-#   0.71999999999999997
 # ============================================================
 
 gnome_numeric_equal() {
@@ -762,7 +724,7 @@ gnome_gsettings_set() {
 
 
 # ============================================================
-# 15. Resetar uma configuração
+# 15. Resetar configuração
 # ============================================================
 
 gnome_gsettings_reset() {
@@ -1009,7 +971,7 @@ gnome_extension_disable() {
 
 
 # ============================================================
-# 20. Obter estado da extensão
+# 20. Obter estado de extensão
 # ============================================================
 
 gnome_extension_state() {
@@ -1142,8 +1104,6 @@ gnome_test_gsettings() {
 
 # ============================================================
 # 23. Testar schema
-#
-# Útil para diagnóstico.
 # ============================================================
 
 gnome_test_schema() {
