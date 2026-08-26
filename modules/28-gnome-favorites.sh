@@ -105,10 +105,17 @@ for APP in "${FAVORITOS_GNOME[@]}"; do
     done
 
     if [ "$ENCONTRADO" = true ]; then
-        info "Aplicativo encontrado: $APP"
+
+        info "Aplicativo encontrado:"
+        info "  $APP"
+        info "  $DIRETORIO/$APP"
+
         FAVORITOS_VALIDOS+=("$APP")
+
     else
+
         warn "Aplicativo não encontrado: $APP"
+
     fi
 done
 
