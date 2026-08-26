@@ -3,49 +3,65 @@
 # ============================================================
 # Configuração do Dash to Dock
 #
-# Configura:
+# Estratégia:
+#
+#   Fase 1:
+#     - instala a extensão;
+#     - tenta aplicar as configurações imediatamente;
+#
+#   Fase 2:
+#     - cria um autostart temporário;
+#     - reaplica as configurações no próximo login GNOME;
+#     - valida;
+#     - remove o autostart e o helper após sucesso.
+#
+# Configurações:
 #
 #   - Mostrar em todos os monitores
-#   - Posição à esquerda
-#   - Ocultação inteligente desabilitada
-#   - Ocultação automática desabilitada
+#   - Posição: esquerda
+#   - Ocultação inteligente: desabilitada
+#   - Ocultação automática: desabilitada
 #   - Dock sempre visível
-#   - Tamanho limite do dock em 72%
-#   - Modo painel habilitado
-#   - Tamanho máximo dos ícones em 32 px
-#   - Encolher Dash habilitado
+#   - Tamanho limite: 72%
+#   - Modo painel: habilitado
+#   - Ícones: 32 px
+#   - Encolher Dash: habilitado
 #   - Transparência fixa
-#   - Opacidade em 0%
+#   - Opacidade: 0%
 #
-# As configurações são aplicadas ao usuário da sessão GNOME
-# através da biblioteca lib/gnome.sh.
 # ============================================================
 
 set -e
 
-# ------------------------------------------------------------
-# Diretórios do projeto
-# ------------------------------------------------------------
+
+# ============================================================
+# 1. Diretórios
+# ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# ------------------------------------------------------------
-# Bibliotecas
-# ------------------------------------------------------------
+
+# ============================================================
+# 2. Bibliotecas
+# ============================================================
 
 source "${ROOT_DIR}/lib/common.sh"
 source "${ROOT_DIR}/lib/logging.sh"
 source "${ROOT_DIR}/lib/gnome.sh"
 
-# ------------------------------------------------------------
-# Configurações
-# ------------------------------------------------------------
+
+# ============================================================
+# 3. Configurações
+# ============================================================
 
 COMPONENT_NAME="Dash to Dock"
 
 EXTENSION_UUID="dash-to-dock@micxgx.gmail.com"
 SCHEMA="org.gnome.shell.extensions.dash-to-dock"
+
+POST_LOGIN_HELPER_NAME="apply-dash-to-dock.sh"
+AUTOSTART_NAME="apply-dash-to-dock.desktop"
 
 
 echo
@@ -56,12 +72,12 @@ echo
 
 
 # ============================================================
-# 1. Verificar GNOME
+# 4. Verificar GNOME Shell
 # ============================================================
 
 if ! command -v gnome-shell >/dev/null 2>&1; then
 
-    warn "GNOME Shell não foi encontrado."
+    warn "GNOME Shell não encontrado."
     warn "O Dash to Dock será ignorado."
 
     record_component_status \
@@ -73,34 +89,35 @@ if ! command -v gnome-shell >/dev/null 2>&1; then
 
 fi
 
-GNOME_VERSION="$(gnome-shell --version 2>/dev/null || true)"
+
+GNOME_VERSION="$(
+    gnome-shell --version 2>/dev/null ||
+    true
+)"
 
 info "GNOME detectado:"
-info "${GNOME_VERSION:-versão não identificada}"
+info "${GNOME_VERSION:-versão desconhecida}"
 
 
 # ============================================================
-# 2. Instalar Dash to Dock
+# 5. Instalar Dash to Dock
 # ============================================================
 
-info "Verificando instalação do Dash to Dock..."
+info "Instalando/verificando Dash to Dock..."
 
 install_package gnome-shell-extension-dashtodock
-
-# Pacote que fornece a interface gráfica de configuração
-# das extensões GNOME em distribuições Debian.
 install_package gnome-shell-extension-prefs
 
 success "Pacotes do Dash to Dock instalados."
 
 
 # ============================================================
-# 3. Identificar usuário GNOME
+# 6. Identificar usuário GNOME
 # ============================================================
 
 if ! gnome_detect_user; then
 
-    error "Não foi possível identificar o usuário da sessão GNOME."
+    error "Não foi possível identificar o usuário GNOME."
 
     record_component_status \
         "$COMPONENT_NAME" \
@@ -111,378 +128,705 @@ if ! gnome_detect_user; then
 
 fi
 
-info "Usuário GNOME: ${GNOME_USER}"
-info "UID: ${GNOME_UID}"
+
+info "Usuário GNOME:"
+info "$GNOME_USER"
+
+info "UID:"
+info "$GNOME_UID"
+
+info "HOME:"
+info "$GNOME_HOME"
 
 
 # ============================================================
-# 4. Verificar sessão gráfica
+# 7. Diretórios do helper pós-login
 # ============================================================
 
-if ! gnome_session_available; then
+USER_HELPER_DIR="${GNOME_HOME}/.local/lib/script-installation"
 
-    warn "A sessão GNOME do usuário ${GNOME_USER} não está disponível."
-    warn "O Dash to Dock foi instalado, mas não pode ser configurado agora."
+USER_HELPER_FILE="${USER_HELPER_DIR}/${POST_LOGIN_HELPER_NAME}"
 
-    echo
-    warn "Entre na sessão gráfica do usuário e execute novamente:"
-    echo
-    echo "    sudo bash modules/24-dash-to-dock.sh"
-    echo
+USER_AUTOSTART_DIR="${GNOME_HOME}/.config/autostart"
 
-    record_component_status \
-        "$COMPONENT_NAME" \
-        "SKIPPED" \
-        "Instalado; sessão GNOME não disponível"
-
-    exit 0
-
-fi
+USER_AUTOSTART_FILE="${USER_AUTOSTART_DIR}/${AUTOSTART_NAME}"
 
 
 # ============================================================
-# 5. Verificar schema do Dash to Dock
+# 8. Criar helper pós-login
 # ============================================================
 
-info "Verificando schema do Dash to Dock..."
+info "Criando helper de configuração pós-login..."
 
-if ! gnome_schema_exists "$SCHEMA"; then
+mkdir -p "$USER_HELPER_DIR"
+mkdir -p "$USER_AUTOSTART_DIR"
 
-    warn "O schema do Dash to Dock ainda não está disponível:"
-    warn "$SCHEMA"
 
-    echo
-    warn "Isso pode acontecer quando a extensão foi instalada"
-    warn "durante uma sessão GNOME já iniciada."
-    echo
-    warn "Encerre a sessão GNOME e entre novamente."
-    warn "Depois execute este módulo novamente."
+cat > "$USER_HELPER_FILE" <<'EOF'
+#!/bin/bash
 
-    record_component_status \
-        "$COMPONENT_NAME" \
-        "SKIPPED" \
-        "Instalado; schema ainda não carregado"
+# ============================================================
+# Aplicação pós-login do Dash to Dock
+#
+# Este arquivo é criado automaticamente pelo módulo:
+#
+#   24-dash-to-dock.sh
+#
+# Ele é executado no primeiro login GNOME após a instalação.
+# Depois de aplicar e validar as configurações, remove:
+#
+#   - o arquivo de autostart;
+#   - este próprio helper.
+#
+# ============================================================
 
-    exit 0
+set -e
 
-fi
 
-success "Schema do Dash to Dock localizado."
+SCHEMA="org.gnome.shell.extensions.dash-to-dock"
+
+EXTENSION_UUID="dash-to-dock@micxgx.gmail.com"
+
+AUTOSTART_FILE="${HOME}/.config/autostart/apply-dash-to-dock.desktop"
+
+HELPER_FILE="${HOME}/.local/lib/script-installation/apply-dash-to-dock.sh"
+
+
+echo "[INFO] Configuração pós-login do Dash to Dock iniciada."
 
 
 # ============================================================
-# 6. Verificar existência das chaves necessárias
+# 1. Aguardar sessão GNOME estabilizar
 # ============================================================
 
-dash_key_exists() {
+MAX_ATTEMPTS=30
+ATTEMPT=1
 
-    local key="$1"
+while [[ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]]; do
 
-    gnome_gsettings list-keys "$SCHEMA" |
-        grep -Fxq "$key"
-}
+    if gsettings list-schemas 2>/dev/null |
+        grep -Fxq "$SCHEMA"; then
 
-
-# ============================================================
-# 7. Aplicar configuração
-# ============================================================
-
-dash_set() {
-
-    local key="$1"
-    local value="$2"
-
-    # --------------------------------------------------------
-    # Verificar se a chave existe nesta versão
-    # --------------------------------------------------------
-
-    if ! dash_key_exists "$key"; then
-
-        warn "Chave não encontrada no Dash to Dock:"
-        warn "$key"
-
-        return 0
+        break
 
     fi
 
-    # --------------------------------------------------------
-    # Aplicar através da biblioteca comum
-    # --------------------------------------------------------
+    echo "[INFO] Aguardando schema do Dash to Dock..."
+    echo "[INFO] Tentativa ${ATTEMPT}/${MAX_ATTEMPTS}"
 
-    gnome_gsettings_set \
-        "$SCHEMA" \
-        "$key" \
-        "$value"
-}
+    sleep 2
 
+    ATTEMPT=$((ATTEMPT + 1))
 
-# ============================================================
-# 8. Mostrar em todos os monitores
-# ============================================================
-
-info "Configurando suporte a múltiplos monitores..."
-
-dash_set \
-    "multi-monitor" \
-    "true"
+done
 
 
 # ============================================================
-# 9. Posição na tela
+# 2. Validar schema
 # ============================================================
 
-info "Configurando posição do dock..."
+if ! gsettings list-schemas 2>/dev/null |
+    grep -Fxq "$SCHEMA"; then
 
-dash_set \
-    "dock-position" \
-    "'LEFT'"
+    echo "[ERRO] Schema do Dash to Dock ainda não disponível."
 
+    echo "[INFO] O autostart será mantido para nova tentativa."
 
-# ============================================================
-# 10. Desabilitar ocultação inteligente
-# ============================================================
-
-info "Desabilitando ocultação inteligente..."
-
-dash_set \
-    "intellihide" \
-    "false"
-
-
-# ============================================================
-# 11. Desabilitar ocultação automática
-# ============================================================
-
-info "Desabilitando ocultação automática..."
-
-dash_set \
-    "autohide" \
-    "false"
-
-
-# ============================================================
-# 12. Manter dock sempre visível
-# ============================================================
-
-info "Mantendo dock sempre visível..."
-
-dash_set \
-    "dock-fixed" \
-    "true"
-
-
-# ============================================================
-# 13. Tamanho limite do dock
-# ============================================================
-
-info "Configurando tamanho limite do dock em 72%..."
-
-dash_set \
-    "height-fraction" \
-    "0.72"
-
-
-# ============================================================
-# 14. Modo painel
-# ============================================================
-
-info "Habilitando modo painel..."
-
-dash_set \
-    "extend-height" \
-    "true"
-
-
-# ============================================================
-# 15. Tamanho máximo dos ícones
-# ============================================================
-
-info "Configurando tamanho máximo dos ícones em 32 px..."
-
-dash_set \
-    "dash-max-icon-size" \
-    "32"
-
-
-# ============================================================
-# 16. Encolher o Dash
-# ============================================================
-
-info "Habilitando opção Encolher o Dash..."
-
-dash_set \
-    "custom-theme-shrink" \
-    "true"
-
-
-# ============================================================
-# 17. Transparência fixa
-# ============================================================
-
-info "Configurando transparência como fixa..."
-
-dash_set \
-    "transparency-mode" \
-    "'FIXED'"
-
-
-# ============================================================
-# 18. Opacidade
-# ============================================================
-
-info "Configurando opacidade em 0%..."
-
-dash_set \
-    "background-opacity" \
-    "0.0"
-
-
-# ============================================================
-# 19. Habilitar extensão
-# ============================================================
-
-echo
-info "Verificando se a extensão está carregada pelo GNOME..."
-
-EXTENSION_LOADED=false
-
-if gnome_extensions list 2>/dev/null |
-    grep -Fxq "$EXTENSION_UUID"; then
-
-    EXTENSION_LOADED=true
+    exit 1
 
 fi
 
 
-if [[ "$EXTENSION_LOADED" == true ]]; then
+echo "[OK] Schema do Dash to Dock disponível."
 
-    info "Extensão localizada:"
-    info "$EXTENSION_UUID"
 
-    # --------------------------------------------------------
-    # Verificar estado atual
-    # --------------------------------------------------------
+# ============================================================
+# 3. Aplicar configurações
+# ============================================================
 
-    EXTENSION_STATE="$(
-        gnome_extensions info "$EXTENSION_UUID" 2>/dev/null |
-        awk -F': ' '/State:/ {print $2}' |
-        head -n 1
-    )"
+echo "[INFO] Aplicando configurações..."
 
-    if [[ "$EXTENSION_STATE" == "ENABLED" ]]; then
+gsettings set "$SCHEMA" multi-monitor true
 
-        success "Dash to Dock já está habilitado."
+gsettings set "$SCHEMA" dock-position 'LEFT'
+
+gsettings set "$SCHEMA" intellihide false
+
+gsettings set "$SCHEMA" autohide false
+
+gsettings set "$SCHEMA" dock-fixed true
+
+gsettings set "$SCHEMA" height-fraction 0.72
+
+gsettings set "$SCHEMA" extend-height true
+
+gsettings set "$SCHEMA" dash-max-icon-size 32
+
+gsettings set "$SCHEMA" custom-theme-shrink true
+
+gsettings set "$SCHEMA" transparency-mode 'FIXED'
+
+gsettings set "$SCHEMA" background-opacity 0.0
+
+
+# ============================================================
+# 4. Habilitar extensão
+# ============================================================
+
+if command -v gnome-extensions >/dev/null 2>&1; then
+
+    if gnome-extensions list 2>/dev/null |
+        grep -Fxq "$EXTENSION_UUID"; then
+
+        echo "[INFO] Habilitando Dash to Dock..."
+
+        gnome-extensions enable "$EXTENSION_UUID" \
+            2>/dev/null ||
+            true
 
     else
 
-        info "Habilitando Dash to Dock..."
-
-        if gnome_extensions enable "$EXTENSION_UUID"; then
-
-            success "Dash to Dock habilitado."
-
-        else
-
-            warn "Não foi possível habilitar a extensão nesta sessão."
-            warn "Pode ser necessário fazer logout/login."
-
-        fi
+        echo "[AVISO] Extensão ainda não aparece em gnome-extensions list."
 
     fi
-
-else
-
-    warn "O GNOME ainda não carregou a extensão:"
-    warn "$EXTENSION_UUID"
-
-    echo
-    warn "As preferências já foram gravadas."
-    warn "Faça logout e login para carregar a extensão."
 
 fi
 
 
 # ============================================================
-# 20. Ler configurações finais
+# 5. Validar configurações
 # ============================================================
 
-echo
-info "Validando configurações finais..."
-
-FINAL_MULTI_MONITOR="$(
-    gnome_gsettings get \
+MULTI_MONITOR="$(
+    gsettings get \
         "$SCHEMA" \
         multi-monitor
 )"
 
-FINAL_POSITION="$(
-    gnome_gsettings get \
+POSITION="$(
+    gsettings get \
         "$SCHEMA" \
         dock-position
 )"
 
-FINAL_INTELLIHIDE="$(
-    gnome_gsettings get \
+INTELLIHIDE="$(
+    gsettings get \
         "$SCHEMA" \
         intellihide
 )"
 
-FINAL_AUTOHIDE="$(
-    gnome_gsettings get \
+AUTOHIDE="$(
+    gsettings get \
         "$SCHEMA" \
         autohide
 )"
 
-FINAL_DOCK_FIXED="$(
-    gnome_gsettings get \
+DOCK_FIXED="$(
+    gsettings get \
         "$SCHEMA" \
         dock-fixed
 )"
 
-FINAL_HEIGHT="$(
-    gnome_gsettings get \
+HEIGHT="$(
+    gsettings get \
         "$SCHEMA" \
         height-fraction
 )"
 
-FINAL_EXTEND_HEIGHT="$(
-    gnome_gsettings get \
+EXTEND_HEIGHT="$(
+    gsettings get \
         "$SCHEMA" \
         extend-height
 )"
 
-FINAL_ICON_SIZE="$(
-    gnome_gsettings get \
+ICON_SIZE="$(
+    gsettings get \
         "$SCHEMA" \
         dash-max-icon-size
 )"
 
-FINAL_SHRINK="$(
-    gnome_gsettings get \
+SHRINK="$(
+    gsettings get \
         "$SCHEMA" \
         custom-theme-shrink
 )"
 
-FINAL_TRANSPARENCY_MODE="$(
-    gnome_gsettings get \
+TRANSPARENCY_MODE="$(
+    gsettings get \
         "$SCHEMA" \
         transparency-mode
 )"
 
-FINAL_BACKGROUND_OPACITY="$(
-    gnome_gsettings get \
+BACKGROUND_OPACITY="$(
+    gsettings get \
         "$SCHEMA" \
         background-opacity
 )"
 
 
 # ============================================================
-# 21. Resultado
+# 6. Validações boolean/string
+# ============================================================
+
+VALID=true
+
+
+if [[ "$MULTI_MONITOR" != "true" ]]; then
+
+    echo "[ERRO] multi-monitor incorreto:"
+    echo "       $MULTI_MONITOR"
+
+    VALID=false
+
+fi
+
+
+if [[ "$POSITION" != "'LEFT'" ]]; then
+
+    echo "[ERRO] dock-position incorreto:"
+    echo "       $POSITION"
+
+    VALID=false
+
+fi
+
+
+if [[ "$INTELLIHIDE" != "false" ]]; then
+
+    echo "[ERRO] intellihide incorreto:"
+    echo "       $INTELLIHIDE"
+
+    VALID=false
+
+fi
+
+
+if [[ "$AUTOHIDE" != "false" ]]; then
+
+    echo "[ERRO] autohide incorreto:"
+    echo "       $AUTOHIDE"
+
+    VALID=false
+
+fi
+
+
+if [[ "$DOCK_FIXED" != "true" ]]; then
+
+    echo "[ERRO] dock-fixed incorreto:"
+    echo "       $DOCK_FIXED"
+
+    VALID=false
+
+fi
+
+
+if [[ "$EXTEND_HEIGHT" != "true" ]]; then
+
+    echo "[ERRO] extend-height incorreto:"
+    echo "       $EXTEND_HEIGHT"
+
+    VALID=false
+
+fi
+
+
+if [[ "$ICON_SIZE" != "32" ]]; then
+
+    echo "[ERRO] dash-max-icon-size incorreto:"
+    echo "       $ICON_SIZE"
+
+    VALID=false
+
+fi
+
+
+if [[ "$SHRINK" != "true" ]]; then
+
+    echo "[ERRO] custom-theme-shrink incorreto:"
+    echo "       $SHRINK"
+
+    VALID=false
+
+fi
+
+
+if [[ "$TRANSPARENCY_MODE" != "'FIXED'" ]]; then
+
+    echo "[ERRO] transparency-mode incorreto:"
+    echo "       $TRANSPARENCY_MODE"
+
+    VALID=false
+
+fi
+
+
+# ============================================================
+# 7. Validar valores double com tolerância
+# ============================================================
+
+numeric_equal() {
+
+    local expected="$1"
+    local actual="$2"
+
+    awk \
+        -v expected="$expected" \
+        -v actual="$actual" \
+        'BEGIN {
+
+            difference = expected - actual
+
+            if (difference < 0)
+                difference = -difference
+
+            tolerance = 0.000000001
+
+            exit !(difference <= tolerance)
+        }'
+}
+
+
+if ! numeric_equal 0.72 "$HEIGHT"; then
+
+    echo "[ERRO] height-fraction incorreto:"
+    echo "       $HEIGHT"
+
+    VALID=false
+
+fi
+
+
+if ! numeric_equal 0.0 "$BACKGROUND_OPACITY"; then
+
+    echo "[ERRO] background-opacity incorreto:"
+    echo "       $BACKGROUND_OPACITY"
+
+    VALID=false
+
+fi
+
+
+# ============================================================
+# 8. Resultado da validação
+# ============================================================
+
+if [[ "$VALID" != true ]]; then
+
+    echo "[ERRO] Uma ou mais configurações não foram confirmadas."
+
+    echo "[INFO] O autostart será mantido para uma nova tentativa."
+
+    exit 1
+
+fi
+
+
+echo
+echo "============================================================"
+echo " Dash to Dock configurado com sucesso"
+echo "============================================================"
+echo
+
+echo "Mostrar em todos os monitores : ${MULTI_MONITOR}"
+echo "Posição                       : ${POSITION}"
+echo "Ocultação inteligente         : ${INTELLIHIDE}"
+echo "Ocultação automática          : ${AUTOHIDE}"
+echo "Dock sempre visível           : ${DOCK_FIXED}"
+echo "Tamanho limite                : ${HEIGHT}"
+echo "Modo painel                   : ${EXTEND_HEIGHT}"
+echo "Tamanho dos ícones            : ${ICON_SIZE}"
+echo "Encolher Dash                 : ${SHRINK}"
+echo "Transparência                 : ${TRANSPARENCY_MODE}"
+echo "Opacidade                     : ${BACKGROUND_OPACITY}"
+echo
+
+
+# ============================================================
+# 9. Remover autostart
+# ============================================================
+
+if [[ -f "$AUTOSTART_FILE" ]]; then
+
+    rm -f "$AUTOSTART_FILE"
+
+    echo "[OK] Autostart temporário removido."
+
+fi
+
+
+# ============================================================
+# 10. Remover helper
+#
+# Não podemos apagar o próprio script antes do final.
+# O rm é executado por último.
+# ============================================================
+
+echo "[OK] Configuração pós-login concluída."
+
+
+rm -f "$HELPER_FILE" 2>/dev/null || true
+
+
+exit 0
+EOF
+
+
+# ============================================================
+# 9. Permissões do helper
+# ============================================================
+
+chown \
+    "${GNOME_USER}:${GNOME_USER}" \
+    "$USER_HELPER_FILE"
+
+chmod 755 \
+    "$USER_HELPER_FILE"
+
+
+success "Helper pós-login criado:"
+info "$USER_HELPER_FILE"
+
+
+# ============================================================
+# 10. Criar autostart one-shot
+# ============================================================
+
+info "Criando autostart temporário..."
+
+cat > "$USER_AUTOSTART_FILE" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Aplicar configuração do Dash to Dock
+Comment=Aplica as preferências do Dash to Dock após o login GNOME
+Exec=${USER_HELPER_FILE}
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+OnlyShowIn=GNOME;
+EOF
+
+
+chown \
+    "${GNOME_USER}:${GNOME_USER}" \
+    "$USER_AUTOSTART_FILE"
+
+chmod 644 \
+    "$USER_AUTOSTART_FILE"
+
+
+success "Autostart temporário criado:"
+info "$USER_AUTOSTART_FILE"
+
+
+# ============================================================
+# 11. Garantir propriedade dos diretórios criados
+# ============================================================
+
+chown \
+    "${GNOME_USER}:${GNOME_USER}" \
+    "$USER_HELPER_DIR"
+
+chown \
+    "${GNOME_USER}:${GNOME_USER}" \
+    "$USER_AUTOSTART_DIR"
+
+
+# ============================================================
+# 12. Tentar configuração imediata
+#
+# Isso continua sendo útil quando o setup.sh é executado
+# dentro de uma sessão GNOME já funcional.
+#
+# Entretanto, a configuração pós-login continuará existente
+# como garantia.
+# ============================================================
+
+if gnome_session_available; then
+
+    echo
+    info "Sessão GNOME disponível."
+    info "Tentando aplicar configurações imediatamente..."
+
+
+    if gnome_schema_exists "$SCHEMA"; then
+
+        # ----------------------------------------------------
+        # Mostrar em todos os monitores
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "multi-monitor" \
+            "true"
+
+
+        # ----------------------------------------------------
+        # Posição esquerda
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "dock-position" \
+            "'LEFT'"
+
+
+        # ----------------------------------------------------
+        # Desabilitar ocultação inteligente
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "intellihide" \
+            "false"
+
+
+        # ----------------------------------------------------
+        # Desabilitar autohide
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "autohide" \
+            "false"
+
+
+        # ----------------------------------------------------
+        # Manter visível
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "dock-fixed" \
+            "true"
+
+
+        # ----------------------------------------------------
+        # Tamanho limite: 72%
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "height-fraction" \
+            "0.72"
+
+
+        # ----------------------------------------------------
+        # Modo painel
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "extend-height" \
+            "true"
+
+
+        # ----------------------------------------------------
+        # Ícones: 32 px
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "dash-max-icon-size" \
+            "32"
+
+
+        # ----------------------------------------------------
+        # Encolher Dash
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "custom-theme-shrink" \
+            "true"
+
+
+        # ----------------------------------------------------
+        # Transparência fixa
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "transparency-mode" \
+            "'FIXED'"
+
+
+        # ----------------------------------------------------
+        # Opacidade 0%
+        # ----------------------------------------------------
+
+        gnome_gsettings_set \
+            "$SCHEMA" \
+            "background-opacity" \
+            "0.0"
+
+
+        success "Preferências imediatas aplicadas."
+
+    else
+
+        warn "Schema ainda não disponível na sessão atual."
+        warn "A configuração será reaplicada no próximo login."
+
+    fi
+
+
+else
+
+    warn "Sessão GNOME não disponível neste momento."
+    warn "A configuração será aplicada automaticamente no próximo login."
+
+fi
+
+
+# ============================================================
+# 13. Tentar habilitar extensão imediatamente
+# ============================================================
+
+if gnome_session_available; then
+
+    if gnome_extension_exists "$EXTENSION_UUID"; then
+
+        if gnome_extension_enabled "$EXTENSION_UUID"; then
+
+            success "Dash to Dock já está habilitado."
+
+        else
+
+            info "Tentando habilitar Dash to Dock..."
+
+            if gnome_extension_enable "$EXTENSION_UUID"; then
+
+                success "Dash to Dock habilitado."
+
+            else
+
+                warn "Não foi possível confirmar a ativação nesta sessão."
+                warn "O helper pós-login tentará novamente."
+
+            fi
+
+        fi
+
+    else
+
+        warn "Dash to Dock ainda não aparece na sessão atual."
+        warn "Isso é esperado imediatamente após instalar a extensão."
+        warn "O helper pós-login tentará novamente."
+
+    fi
+
+fi
+
+
+# ============================================================
+# 14. Resultado
 # ============================================================
 
 echo
 echo "============================================================"
-echo " Dash to Dock configurado"
+echo " Dash to Dock preparado"
 echo "============================================================"
 echo
 
@@ -490,46 +834,38 @@ echo "Usuário:"
 echo "  ${GNOME_USER}"
 echo
 
-echo "Configurações:"
+echo "Configuração desejada:"
 echo
-echo "  Mostrar em todos os monitores : ${FINAL_MULTI_MONITOR}"
-echo "  Posição                       : ${FINAL_POSITION}"
-echo "  Ocultação inteligente         : ${FINAL_INTELLIHIDE}"
-echo "  Ocultação automática          : ${FINAL_AUTOHIDE}"
-echo "  Dock sempre visível           : ${FINAL_DOCK_FIXED}"
-echo "  Tamanho limite                : ${FINAL_HEIGHT}"
-echo "  Modo painel                   : ${FINAL_EXTEND_HEIGHT}"
-echo "  Tamanho máximo dos ícones     : ${FINAL_ICON_SIZE} px"
-echo "  Encolher Dash                 : ${FINAL_SHRINK}"
-echo "  Transparência                 : ${FINAL_TRANSPARENCY_MODE}"
-echo "  Opacidade                     : ${FINAL_BACKGROUND_OPACITY}"
+echo "  Mostrar em todos os monitores : SIM"
+echo "  Posição                       : ESQUERDA"
+echo "  Ocultação inteligente         : NÃO"
+echo "  Ocultação automática          : NÃO"
+echo "  Dock sempre visível           : SIM"
+echo "  Tamanho limite                : 72%"
+echo "  Modo painel                   : SIM"
+echo "  Tamanho máximo dos ícones     : 32 px"
+echo "  Encolher Dash                 : SIM"
+echo "  Transparência                 : FIXA"
+echo "  Opacidade                     : 0%"
 echo
+
+info "Uma reaplicação automática foi preparada para"
+info "o próximo login GNOME do usuário ${GNOME_USER}."
+
+info "Depois de aplicar e validar as configurações,"
+info "o autostart será removido automaticamente."
 
 
 # ============================================================
-# 22. Registrar resultado
+# 15. Registrar componente
 # ============================================================
 
-if [[ "$EXTENSION_LOADED" == true ]]; then
+record_component_status \
+    "$COMPONENT_NAME" \
+    "OK" \
+    "Configurado; reaplicação pós-login preparada"
 
-    success "Dash to Dock configurado com sucesso."
 
-    record_component_status \
-        "$COMPONENT_NAME" \
-        "OK" \
-        "Configurado para ${GNOME_USER}"
-
-else
-
-    warn "Preferências configuradas."
-    warn "A extensão será carregada após novo login no GNOME."
-
-    record_component_status \
-        "$COMPONENT_NAME" \
-        "OK" \
-        "Preferências configuradas; novo login pode ser necessário"
-
-fi
-
+success "Módulo Dash to Dock finalizado."
 
 exit 0
