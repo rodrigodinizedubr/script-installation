@@ -1,47 +1,91 @@
 #!/bin/bash
 
 # ============================================================
-# Biblioteca comum para configurações GNOME
+# Biblioteca comum para integração com GNOME
 #
 # Responsabilidades:
 #
-#   - Identificar o usuário da sessão GNOME
-#   - Identificar UID e HOME
-#   - Localizar XDG_RUNTIME_DIR
-#   - Localizar D-Bus da sessão
-#   - Executar comandos como usuário gráfico
-#   - Isolar o ambiente XDG do root
-#   - Executar gsettings
-#   - Executar gnome-extensions
-#   - Verificar schemas
-#   - Verificar chaves
-#   - Aplicar configurações gsettings
-#   - Validar valores gravados
-#   - Comparar valores numéricos com tolerância
+#   - identificar o usuário gráfico;
+#   - localizar UID, HOME, runtime e D-Bus;
+#   - executar comandos no contexto correto do usuário;
+#   - impedir vazamento de variáveis XDG do root;
+#   - executar gsettings;
+#   - executar gnome-extensions;
+#   - reconhecer schemas normais;
+#   - reconhecer schemas relocatable;
+#   - verificar chaves;
+#   - ler/aplicar/resetar valores;
+#   - validar doubles com tolerância;
+#   - habilitar/desabilitar extensões GNOME.
 #
-# Utilizado por:
+# Utilizado por módulos como:
 #
 #   22-disable-screen-lock.sh
-#   23-gnome-favorites.sh
 #   24-dash-to-dock.sh
+#   25-flameshot.sh
 #   25-tilix-config.sh
+#   28-gnome-favorites.sh
 #
 # ============================================================
 
 
 # ============================================================
-# 1. Evitar carregamento duplicado
+# 1. Proteção contra carregamento duplicado
 # ============================================================
 
 if [[ -n "${GNOME_LIB_LOADED:-}" ]]; then
-    return 0
+    return 0 2>/dev/null || exit 0
 fi
 
 GNOME_LIB_LOADED=1
 
 
 # ============================================================
-# 2. Identificar usuário GNOME
+# 2. Funções internas de log
+# ============================================================
+
+_gnome_info() {
+
+    if declare -F info >/dev/null 2>&1; then
+        info "$@"
+    else
+        echo "[INFO] $*"
+    fi
+}
+
+
+_gnome_warn() {
+
+    if declare -F warn >/dev/null 2>&1; then
+        warn "$@"
+    else
+        echo "[AVISO] $*" >&2
+    fi
+}
+
+
+_gnome_error() {
+
+    if declare -F error >/dev/null 2>&1; then
+        error "$@"
+    else
+        echo "[ERRO] $*" >&2
+    fi
+}
+
+
+_gnome_success() {
+
+    if declare -F success >/dev/null 2>&1; then
+        success "$@"
+    else
+        echo "[OK] $*"
+    fi
+}
+
+
+# ============================================================
+# 3. Detectar usuário da sessão GNOME
 # ============================================================
 
 gnome_detect_user() {
@@ -50,17 +94,15 @@ gnome_detect_user() {
 
     # --------------------------------------------------------
     # Prioridade 1:
-    # usuário definido no config.conf do projeto
+    # usuário definido no config.conf
     #
     # Exemplo:
     #
     #   USUARIO="operador"
-    #
-    # Essa é a prioridade principal porque o projeto pode ser
-    # executado por outro administrador usando sudo.
     # --------------------------------------------------------
 
-    if [[ -n "${USUARIO:-}" && "${USUARIO}" != "root" ]]; then
+    if [[ -n "${USUARIO:-}" &&
+          "${USUARIO}" != "root" ]]; then
 
         if id "$USUARIO" >/dev/null 2>&1; then
             detected_user="$USUARIO"
@@ -87,16 +129,16 @@ gnome_detect_user() {
 
     # --------------------------------------------------------
     # Prioridade 3:
-    # procurar sessão gráfica ativa através do loginctl
+    # procurar sessão gráfica ativa
     # --------------------------------------------------------
 
     if [[ -z "$detected_user" ]] &&
        command -v loginctl >/dev/null 2>&1; then
 
-        local session
-        local candidate
-        local active
-        local type
+        local session=""
+        local candidate=""
+        local active=""
+        local type=""
 
         while read -r session _ candidate _; do
 
@@ -127,7 +169,6 @@ gnome_detect_user() {
                     "$type" == "x11" ) ]]; then
 
                 detected_user="$candidate"
-
                 break
 
             fi
@@ -142,26 +183,23 @@ gnome_detect_user() {
 
 
     # --------------------------------------------------------
-    # Nenhum usuário encontrado
+    # Validar resultado
     # --------------------------------------------------------
 
     if [[ -z "$detected_user" ]]; then
 
-        echo "[ERRO] Não foi possível identificar o usuário GNOME." >&2
+        _gnome_error \
+            "Não foi possível identificar o usuário da sessão GNOME."
 
         return 1
 
     fi
 
-
-    # --------------------------------------------------------
-    # Validar usuário
-    # --------------------------------------------------------
 
     if ! id "$detected_user" >/dev/null 2>&1; then
 
-        echo "[ERRO] Usuário GNOME não existe:" >&2
-        echo "       $detected_user" >&2
+        _gnome_error \
+            "Usuário GNOME não existe: ${detected_user}"
 
         return 1
 
@@ -169,7 +207,7 @@ gnome_detect_user() {
 
 
     # --------------------------------------------------------
-    # Obter informações
+    # Informações do usuário
     # --------------------------------------------------------
 
     GNOME_USER="$detected_user"
@@ -178,21 +216,25 @@ gnome_detect_user() {
         id -u "$GNOME_USER"
     )"
 
+    GNOME_GID="$(
+        id -g "$GNOME_USER"
+    )"
+
+    GNOME_GROUP="$(
+        id -gn "$GNOME_USER"
+    )"
+
     GNOME_HOME="$(
         getent passwd "$GNOME_USER" |
         cut -d: -f6
     )"
 
 
-    # --------------------------------------------------------
-    # Validar HOME
-    # --------------------------------------------------------
-
     if [[ -z "$GNOME_HOME" ||
           ! -d "$GNOME_HOME" ]]; then
 
-        echo "[ERRO] HOME do usuário GNOME inválido:" >&2
-        echo "       ${GNOME_HOME:-<não encontrado>}" >&2
+        _gnome_error \
+            "HOME inválido para ${GNOME_USER}: ${GNOME_HOME:-<vazio>}"
 
         return 1
 
@@ -209,11 +251,13 @@ gnome_detect_user() {
 
 
     # --------------------------------------------------------
-    # Exportar informações
+    # Exportar
     # --------------------------------------------------------
 
     export GNOME_USER
     export GNOME_UID
+    export GNOME_GID
+    export GNOME_GROUP
     export GNOME_HOME
     export GNOME_RUNTIME_DIR
     export GNOME_DBUS_SOCKET
@@ -223,14 +267,10 @@ gnome_detect_user() {
 
 
 # ============================================================
-# 3. Verificar sessão GNOME
+# 4. Verificar disponibilidade da sessão GNOME
 # ============================================================
 
 gnome_session_available() {
-
-    # --------------------------------------------------------
-    # Detectar usuário caso ainda não tenha sido feito
-    # --------------------------------------------------------
 
     if [[ -z "${GNOME_USER:-}" ]]; then
 
@@ -241,63 +281,46 @@ gnome_session_available() {
     fi
 
 
-    # --------------------------------------------------------
-    # Verificar runtime
-    # --------------------------------------------------------
-
     if [[ ! -d "$GNOME_RUNTIME_DIR" ]]; then
 
-        echo "[ERRO] Runtime da sessão GNOME não encontrado:" >&2
-        echo "       $GNOME_RUNTIME_DIR" >&2
+        _gnome_error \
+            "Runtime da sessão GNOME não encontrado: ${GNOME_RUNTIME_DIR}"
 
         return 1
 
     fi
 
-
-    # --------------------------------------------------------
-    # Verificar D-Bus
-    # --------------------------------------------------------
 
     if [[ ! -S "$GNOME_DBUS_SOCKET" ]]; then
 
-        echo "[ERRO] D-Bus da sessão GNOME não encontrado:" >&2
-        echo "       $GNOME_DBUS_SOCKET" >&2
+        _gnome_error \
+            "D-Bus da sessão GNOME não encontrado: ${GNOME_DBUS_SOCKET}"
 
         return 1
 
     fi
+
 
     return 0
 }
 
 
 # ============================================================
-# 4. Executar comando no contexto do usuário GNOME
+# 5. Executar comando no contexto do usuário GNOME
 # ============================================================
 
 gnome_run() {
-
-    # --------------------------------------------------------
-    # Verificar sessão
-    # --------------------------------------------------------
 
     gnome_session_available || return 1
 
 
     # --------------------------------------------------------
-    # Executar como usuário GNOME
+    # O setup.sh normalmente roda como root.
     #
-    # IMPORTANTE:
+    # Limpamos variáveis XDG herdadas para evitar mensagens
+    # como:
     #
-    # Removemos explicitamente variáveis XDG herdadas do root.
-    #
-    # Isso evita problemas como:
-    #
-    #   Unable to open
-    #   /root/.local/share/flatpak/exports/share/dconf/...
-    #
-    # quando o setup.sh é executado como root.
+    # /root/.local/share/flatpak/... permissão negada
     # --------------------------------------------------------
 
     runuser -u "$GNOME_USER" -- env \
@@ -315,7 +338,7 @@ gnome_run() {
         XDG_DATA_HOME="$GNOME_HOME/.local/share" \
         XDG_CONFIG_HOME="$GNOME_HOME/.config" \
         XDG_CACHE_HOME="$GNOME_HOME/.cache" \
-        XDG_DATA_DIRS="/usr/local/share:/usr/share" \
+        XDG_DATA_DIRS="/usr/local/share:/usr/share:/var/lib/flatpak/exports/share:${GNOME_HOME}/.local/share/flatpak/exports/share" \
         XDG_CONFIG_DIRS="/etc/xdg" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=${GNOME_DBUS_SOCKET}" \
         "$@"
@@ -323,14 +346,15 @@ gnome_run() {
 
 
 # ============================================================
-# 5. Wrapper para gsettings
+# 6. Wrapper para gsettings
 # ============================================================
 
 gnome_gsettings() {
 
     if ! command -v gsettings >/dev/null 2>&1; then
 
-        echo "[ERRO] Comando gsettings não encontrado." >&2
+        _gnome_error \
+            "Comando gsettings não encontrado."
 
         return 1
 
@@ -341,14 +365,15 @@ gnome_gsettings() {
 
 
 # ============================================================
-# 6. Wrapper para gnome-extensions
+# 7. Wrapper para gnome-extensions
 # ============================================================
 
 gnome_extensions() {
 
     if ! command -v gnome-extensions >/dev/null 2>&1; then
 
-        echo "[ERRO] Comando gnome-extensions não encontrado." >&2
+        _gnome_error \
+            "Comando gnome-extensions não encontrado."
 
         return 1
 
@@ -359,24 +384,47 @@ gnome_extensions() {
 
 
 # ============================================================
-# 7. Verificar existência de schema
+# 8. Obter nome-base de um schema
+#
+# Exemplos:
+#
+#   org.gnome.shell
+#
+# permanece:
+#
+#   org.gnome.shell
+#
+# Já:
+#
+#   org.example.Schema:/caminho/
+#
+# retorna:
+#
+#   org.example.Schema
 # ============================================================
 
+gnome_schema_base_name() {
+
+    local schema="$1"
+
+    printf '%s\n' "${schema%%:*}"
+}
+
+
 # ============================================================
-# Verificar existência de schema
+# 9. Verificar existência de schema
 #
 # Suporta:
 #
-#   Schema normal:
+# Schema normal:
 #
-#     org.gnome.shell
+#   org.gnome.shell
 #
-#   Schema relocatable:
+# Schema relocatable:
 #
-#     org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:
-#     /org/gnome/settings-daemon/plugins/media-keys/
-#     custom-keybindings/flameshot/
-#
+#   org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:
+#   /org/gnome/settings-daemon/plugins/media-keys/
+#   custom-keybindings/flameshot/
 # ============================================================
 
 gnome_schema_exists() {
@@ -385,32 +433,19 @@ gnome_schema_exists() {
 
     if [[ -z "$schema" ]]; then
 
-        _gnome_error "Schema não informado."
+        _gnome_error \
+            "Schema não informado."
 
         return 1
 
     fi
 
 
-    # --------------------------------------------------------
-    # Remover path de schemas relocatable
-    #
-    # Exemplo:
-    #
-    # Entrada:
-    #
-    # org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:
-    # /org/gnome/settings-daemon/plugins/media-keys/
-    # custom-keybindings/flameshot/
-    #
-    # Resultado:
-    #
-    # org.gnome.settings-daemon.plugins.media-keys.custom-keybinding
-    # --------------------------------------------------------
-
     local base_schema
 
-    base_schema="${schema%%:*}"
+    base_schema="$(
+        gnome_schema_base_name "$schema"
+    )"
 
 
     # --------------------------------------------------------
@@ -446,7 +481,13 @@ gnome_schema_exists() {
 
 
 # ============================================================
-# 8. Verificar existência de chave
+# 10. Verificar existência de chave
+#
+# IMPORTANTE:
+#
+# Para schema relocatable usamos o schema COMPLETO:
+#
+#   schema:/path/
 # ============================================================
 
 gnome_key_exists() {
@@ -461,25 +502,46 @@ gnome_key_exists() {
 
     fi
 
-    gnome_gsettings list-keys "$schema" |
+
+    gnome_gsettings \
+        list-keys \
+        "$schema" \
+        2>/dev/null |
         grep -Fxq "$key"
 }
 
 
 # ============================================================
-# 9. Verificar se valor é numérico
+# 11. Verificar se valor é numérico
+#
+# Aceita:
+#
+#   0
+#   32
+#   -32
+#   0.72
+#   1.0
+#   1e-5
 # ============================================================
 
 gnome_is_number() {
 
     local value="$1"
 
-    [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ ]]
+    [[ "$value" =~ ^[-+]?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$ ]]
 }
 
 
 # ============================================================
-# 10. Comparar números com tolerância
+# 12. Comparar valores numéricos com tolerância
+#
+# Necessário porque:
+#
+#   0.72
+#
+# pode ser retornado por GSettings como:
+#
+#   0.71999999999999997
 # ============================================================
 
 gnome_numeric_equal() {
@@ -488,6 +550,7 @@ gnome_numeric_equal() {
     local actual="$2"
 
     local tolerance="${3:-0.000000001}"
+
 
     awk \
         -v expected="$expected" \
@@ -509,7 +572,35 @@ gnome_numeric_equal() {
 
 
 # ============================================================
-# 11. Aplicar configuração gsettings
+# 13. Ler configuração
+# ============================================================
+
+gnome_gsettings_get() {
+
+    local schema="$1"
+    local key="$2"
+
+
+    if [[ -z "$schema" ||
+          -z "$key" ]]; then
+
+        _gnome_error \
+            "Schema ou chave não informado."
+
+        return 1
+
+    fi
+
+
+    gnome_gsettings \
+        get \
+        "$schema" \
+        "$key"
+}
+
+
+# ============================================================
+# 14. Aplicar e validar configuração
 # ============================================================
 
 gnome_gsettings_set() {
@@ -520,20 +611,23 @@ gnome_gsettings_set() {
 
 
     # --------------------------------------------------------
-    # Validar parâmetros
+    # Validar argumentos
     # --------------------------------------------------------
 
     if [[ -z "$schema" ]]; then
 
-        echo "[ERRO] Schema não informado." >&2
+        _gnome_error \
+            "Schema não informado."
 
         return 1
 
     fi
 
+
     if [[ -z "$key" ]]; then
 
-        echo "[ERRO] Chave não informada." >&2
+        _gnome_error \
+            "Chave não informada."
 
         return 1
 
@@ -541,12 +635,14 @@ gnome_gsettings_set() {
 
 
     # --------------------------------------------------------
-    # Verificar schema
+    # Validar schema
     # --------------------------------------------------------
 
     if ! gnome_schema_exists "$schema"; then
 
-        echo "[ERRO] Schema GNOME não encontrado:" >&2
+        _gnome_error \
+            "Schema GNOME não encontrado:"
+
         echo "       $schema" >&2
 
         return 1
@@ -555,12 +651,16 @@ gnome_gsettings_set() {
 
 
     # --------------------------------------------------------
-    # Verificar chave
+    # Validar chave
     # --------------------------------------------------------
 
-    if ! gnome_key_exists "$schema" "$key"; then
+    if ! gnome_key_exists \
+        "$schema" \
+        "$key"; then
 
-        echo "[ERRO] Chave GNOME não encontrada:" >&2
+        _gnome_error \
+            "Chave GNOME não encontrada:"
+
         echo "       ${schema}::${key}" >&2
 
         return 1
@@ -569,38 +669,21 @@ gnome_gsettings_set() {
 
 
     # --------------------------------------------------------
-    # Mostrar operação
+    # Aplicar
     # --------------------------------------------------------
 
-    if declare -F info >/dev/null 2>&1; then
-
-        info "Aplicando ${schema}::${key} = ${value}"
-
-    else
-
-        echo "[INFO] Aplicando ${schema}::${key} = ${value}"
-
-    fi
+    _gnome_info \
+        "Aplicando ${schema}::${key} = ${value}"
 
 
-    # --------------------------------------------------------
-    # Gravar valor
-    # --------------------------------------------------------
-
-    if ! gnome_gsettings set \
+    if ! gnome_gsettings \
+        set \
         "$schema" \
         "$key" \
         "$value"; then
 
-        if declare -F error >/dev/null 2>&1; then
-
-            error "Falha ao aplicar ${schema}::${key}."
-
-        else
-
-            echo "[ERRO] Falha ao aplicar ${schema}::${key}." >&2
-
-        fi
+        _gnome_error \
+            "Falha ao aplicar ${schema}::${key}."
 
         return 1
 
@@ -608,13 +691,14 @@ gnome_gsettings_set() {
 
 
     # --------------------------------------------------------
-    # Ler valor gravado
+    # Ler novamente
     # --------------------------------------------------------
 
     local current
 
     current="$(
-        gnome_gsettings get \
+        gnome_gsettings \
+            get \
             "$schema" \
             "$key" \
             2>/dev/null
@@ -623,20 +707,6 @@ gnome_gsettings_set() {
 
     # --------------------------------------------------------
     # Validar números
-    #
-    # IMPORTANTE:
-    #
-    # GSettings utiliza tipos de ponto flutuante.
-    #
-    # Um valor solicitado como:
-    #
-    #   0.72
-    #
-    # pode ser devolvido como:
-    #
-    #   0.71999999999999997
-    #
-    # Esses valores são numericamente equivalentes.
     # --------------------------------------------------------
 
     if gnome_is_number "$value" &&
@@ -646,29 +716,14 @@ gnome_gsettings_set() {
             "$value" \
             "$current"; then
 
-            if declare -F error >/dev/null 2>&1; then
+            _gnome_error \
+                "Validação numérica divergente para ${schema}::${key}."
 
-                error \
-                    "Validação numérica divergente para ${schema}::${key}."
+            _gnome_error \
+                "Esperado: ${value}"
 
-                error "Esperado: ${value}"
-                error "Obtido:   ${current}"
-
-            else
-
-                echo \
-                    "[ERRO] Validação numérica divergente para ${schema}::${key}." \
-                    >&2
-
-                echo \
-                    "[ERRO] Esperado: ${value}" \
-                    >&2
-
-                echo \
-                    "[ERRO] Obtido:   ${current}" \
-                    >&2
-
-            fi
+            _gnome_error \
+                "Obtido:   ${current}"
 
             return 1
 
@@ -676,50 +731,21 @@ gnome_gsettings_set() {
 
 
     # --------------------------------------------------------
-    # Validar demais tipos
-    #
-    # Boolean:
-    #   true
-    #
-    # String:
-    #   'LEFT'
-    #
-    # Enum:
-    #   'FIXED'
-    #
-    # Array:
-    #   ['app1.desktop', 'app2.desktop']
+    # Demais tipos
     # --------------------------------------------------------
 
     else
 
         if [[ "$current" != "$value" ]]; then
 
-            if declare -F error >/dev/null 2>&1; then
+            _gnome_error \
+                "Validação divergente para ${schema}::${key}."
 
-                error \
-                    "Validação divergente para ${schema}::${key}."
+            _gnome_error \
+                "Esperado: ${value}"
 
-                error "Esperado: ${value}"
-
-                error \
-                    "Obtido:   ${current:-<vazio>}"
-
-            else
-
-                echo \
-                    "[ERRO] Validação divergente para ${schema}::${key}." \
-                    >&2
-
-                echo \
-                    "[ERRO] Esperado: ${value}" \
-                    >&2
-
-                echo \
-                    "[ERRO] Obtido: ${current:-<vazio>}" \
-                    >&2
-
-            fi
+            _gnome_error \
+                "Obtido:   ${current:-<vazio>}"
 
             return 1
 
@@ -728,48 +754,15 @@ gnome_gsettings_set() {
     fi
 
 
-    # --------------------------------------------------------
-    # Sucesso
-    # --------------------------------------------------------
-
-    if declare -F success >/dev/null 2>&1; then
-
-        success "${key} = ${current}"
-
-    else
-
-        echo "[OK] ${key} = ${current}"
-
-    fi
+    _gnome_success \
+        "${key} = ${current}"
 
     return 0
 }
 
 
 # ============================================================
-# 12. Ler configuração gsettings
-# ============================================================
-
-gnome_gsettings_get() {
-
-    local schema="$1"
-    local key="$2"
-
-    if [[ -z "$schema" ||
-          -z "$key" ]]; then
-
-        return 1
-
-    fi
-
-    gnome_gsettings get \
-        "$schema" \
-        "$key"
-}
-
-
-# ============================================================
-# 13. Resetar configuração
+# 15. Resetar uma configuração
 # ============================================================
 
 gnome_gsettings_reset() {
@@ -777,49 +770,91 @@ gnome_gsettings_reset() {
     local schema="$1"
     local key="$2"
 
+
     if [[ -z "$schema" ||
           -z "$key" ]]; then
+
+        _gnome_error \
+            "Schema ou chave não informado."
 
         return 1
 
     fi
 
-    gnome_gsettings reset \
+
+    if ! gnome_schema_exists "$schema"; then
+
+        _gnome_error \
+            "Schema GNOME não encontrado: ${schema}"
+
+        return 1
+
+    fi
+
+
+    if ! gnome_key_exists "$schema" "$key"; then
+
+        _gnome_error \
+            "Chave GNOME não encontrada: ${schema}::${key}"
+
+        return 1
+
+    fi
+
+
+    _gnome_info \
+        "Resetando ${schema}::${key}"
+
+
+    gnome_gsettings \
+        reset \
         "$schema" \
         "$key"
 }
 
 
 # ============================================================
-# 14. Verificar extensão GNOME
+# 16. Verificar extensão GNOME
 # ============================================================
 
 gnome_extension_exists() {
 
     local uuid="$1"
 
+
     if [[ -z "$uuid" ]]; then
         return 1
     fi
 
-    gnome_extensions list 2>/dev/null |
+
+    gnome_extensions \
+        list \
+        2>/dev/null |
         grep -Fxq "$uuid"
 }
 
 
 # ============================================================
-# 15. Verificar se extensão está habilitada
+# 17. Verificar se extensão está habilitada
 # ============================================================
 
 gnome_extension_enabled() {
 
     local uuid="$1"
 
+
+    if [[ -z "$uuid" ]]; then
+        return 1
+    fi
+
+
     if ! gnome_extension_exists "$uuid"; then
         return 1
     fi
 
-    gnome_extensions list \
+
+    gnome_extensions \
+        list \
         --enabled \
         2>/dev/null |
         grep -Fxq "$uuid"
@@ -827,88 +862,341 @@ gnome_extension_enabled() {
 
 
 # ============================================================
-# 16. Habilitar extensão GNOME
+# 18. Habilitar extensão GNOME
 # ============================================================
 
 gnome_extension_enable() {
 
     local uuid="$1"
 
+
     if [[ -z "$uuid" ]]; then
 
-        echo "[ERRO] UUID da extensão não informado." >&2
+        _gnome_error \
+            "UUID da extensão GNOME não informado."
 
         return 1
 
     fi
 
-
-    # --------------------------------------------------------
-    # Verificar existência
-    # --------------------------------------------------------
 
     if ! gnome_extension_exists "$uuid"; then
 
-        echo "[AVISO] Extensão GNOME não encontrada:" >&2
-        echo "        $uuid" >&2
+        _gnome_warn \
+            "Extensão GNOME não encontrada: ${uuid}"
 
         return 1
 
     fi
 
 
-    # --------------------------------------------------------
-    # Já habilitada
-    # --------------------------------------------------------
-
     if gnome_extension_enabled "$uuid"; then
 
-        if declare -F success >/dev/null 2>&1; then
-            success "Extensão já habilitada: $uuid"
-        else
-            echo "[OK] Extensão já habilitada: $uuid"
-        fi
+        _gnome_success \
+            "Extensão já habilitada: ${uuid}"
 
         return 0
 
     fi
 
 
-    # --------------------------------------------------------
-    # Habilitar
-    # --------------------------------------------------------
+    _gnome_info \
+        "Habilitando extensão: ${uuid}"
 
-    if ! gnome_extensions enable "$uuid"; then
 
-        echo "[ERRO] Não foi possível habilitar:" >&2
-        echo "       $uuid" >&2
+    if ! gnome_extensions \
+        enable \
+        "$uuid"; then
+
+        _gnome_error \
+            "Não foi possível habilitar a extensão: ${uuid}"
 
         return 1
 
     fi
 
 
-    # --------------------------------------------------------
-    # Validar
-    # --------------------------------------------------------
-
     if gnome_extension_enabled "$uuid"; then
 
-        if declare -F success >/dev/null 2>&1; then
-            success "Extensão habilitada: $uuid"
-        else
-            echo "[OK] Extensão habilitada: $uuid"
-        fi
+        _gnome_success \
+            "Extensão habilitada: ${uuid}"
 
         return 0
 
     fi
 
-    echo "[AVISO] A extensão foi habilitada, mas o GNOME ainda" >&2
-    echo "        não confirmou seu estado nesta sessão." >&2
+
+    _gnome_warn \
+        "A extensão foi habilitada, mas o GNOME ainda não confirmou o estado."
+
+    _gnome_warn \
+        "Pode ser necessário logout/login."
 
     return 1
 }
 
 
 # ============================================================
+# 19. Desabilitar extensão
+# ============================================================
+
+gnome_extension_disable() {
+
+    local uuid="$1"
+
+
+    if [[ -z "$uuid" ]]; then
+
+        _gnome_error \
+            "UUID da extensão GNOME não informado."
+
+        return 1
+
+    fi
+
+
+    if ! gnome_extension_exists "$uuid"; then
+
+        _gnome_warn \
+            "Extensão GNOME não encontrada: ${uuid}"
+
+        return 1
+
+    fi
+
+
+    if ! gnome_extension_enabled "$uuid"; then
+
+        _gnome_success \
+            "Extensão já está desabilitada: ${uuid}"
+
+        return 0
+
+    fi
+
+
+    _gnome_info \
+        "Desabilitando extensão: ${uuid}"
+
+
+    if ! gnome_extensions \
+        disable \
+        "$uuid"; then
+
+        _gnome_error \
+            "Não foi possível desabilitar a extensão: ${uuid}"
+
+        return 1
+
+    fi
+
+
+    if ! gnome_extension_enabled "$uuid"; then
+
+        _gnome_success \
+            "Extensão desabilitada: ${uuid}"
+
+        return 0
+
+    fi
+
+
+    _gnome_error \
+        "Não foi possível confirmar a desativação: ${uuid}"
+
+    return 1
+}
+
+
+# ============================================================
+# 20. Obter estado da extensão
+# ============================================================
+
+gnome_extension_state() {
+
+    local uuid="$1"
+
+
+    if [[ -z "$uuid" ]]; then
+        return 1
+    fi
+
+
+    if ! gnome_extension_exists "$uuid"; then
+        return 1
+    fi
+
+
+    gnome_extensions \
+        info \
+        "$uuid" \
+        2>/dev/null |
+        awk -F': ' \
+            '/State:/ {
+                print $2
+                exit
+            }'
+}
+
+
+# ============================================================
+# 21. Exibir informações da sessão
+# ============================================================
+
+gnome_session_info() {
+
+    if ! gnome_detect_user; then
+        return 1
+    fi
+
+
+    echo
+    echo "============================================================"
+    echo " Sessão GNOME"
+    echo "============================================================"
+    echo
+
+    echo "Usuário:"
+    echo "  ${GNOME_USER}"
+    echo
+
+    echo "UID:"
+    echo "  ${GNOME_UID}"
+    echo
+
+    echo "GID:"
+    echo "  ${GNOME_GID}"
+    echo
+
+    echo "Grupo:"
+    echo "  ${GNOME_GROUP}"
+    echo
+
+    echo "HOME:"
+    echo "  ${GNOME_HOME}"
+    echo
+
+    echo "XDG_RUNTIME_DIR:"
+    echo "  ${GNOME_RUNTIME_DIR}"
+    echo
+
+    echo "D-Bus:"
+    echo "  ${GNOME_DBUS_SOCKET}"
+    echo
+
+
+    if gnome_session_available; then
+
+        echo "Estado:"
+        echo "  DISPONÍVEL"
+
+    else
+
+        echo "Estado:"
+        echo "  INDISPONÍVEL"
+
+        return 1
+
+    fi
+
+
+    echo
+
+    return 0
+}
+
+
+# ============================================================
+# 22. Testar comunicação com GSettings
+# ============================================================
+
+gnome_test_gsettings() {
+
+    if ! gnome_session_available; then
+        return 1
+    fi
+
+
+    _gnome_info \
+        "Testando comunicação com GSettings..."
+
+
+    if gnome_gsettings \
+        list-schemas \
+        >/dev/null 2>&1; then
+
+        _gnome_success \
+            "Comunicação com GSettings funcionando."
+
+        return 0
+
+    fi
+
+
+    _gnome_error \
+        "Não foi possível comunicar com GSettings."
+
+    return 1
+}
+
+
+# ============================================================
+# 23. Testar schema
+#
+# Útil para diagnóstico.
+# ============================================================
+
+gnome_test_schema() {
+
+    local schema="$1"
+
+
+    if [[ -z "$schema" ]]; then
+
+        _gnome_error \
+            "Schema não informado."
+
+        return 1
+
+    fi
+
+
+    local base_schema
+
+    base_schema="$(
+        gnome_schema_base_name "$schema"
+    )"
+
+
+    echo
+    echo "Schema solicitado:"
+    echo "  $schema"
+    echo
+
+    echo "Schema base:"
+    echo "  $base_schema"
+    echo
+
+
+    if gnome_schema_exists "$schema"; then
+
+        _gnome_success \
+            "Schema encontrado."
+
+        return 0
+
+    fi
+
+
+    _gnome_error \
+        "Schema não encontrado."
+
+    return 1
+}
+
+
+# ============================================================
+# 24. Fim
+# ============================================================
+
+return 0 2>/dev/null || true
