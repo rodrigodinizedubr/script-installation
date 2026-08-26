@@ -70,9 +70,20 @@ fi
 # ============================================================
 
 DIRETORIOS_DESKTOP=(
-    "/usr/share/applications"
-    "/usr/local/share/applications"
+    # Aplicativos instalados localmente para o usuário
     "$GNOME_HOME/.local/share/applications"
+
+    # Flatpaks instalados somente para o usuário
+    "$GNOME_HOME/.local/share/flatpak/exports/share/applications"
+
+    # Aplicativos instalados localmente no sistema
+    "/usr/local/share/applications"
+
+    # Aplicativos instalados via APT/.deb
+    "/usr/share/applications"
+
+    # Flatpaks instalados globalmente (--system)
+    "/var/lib/flatpak/exports/share/applications"
 )
 
 # ============================================================
