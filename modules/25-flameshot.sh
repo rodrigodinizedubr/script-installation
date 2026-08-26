@@ -1,21 +1,32 @@
 #!/bin/bash
 
 # ============================================================
-# Flameshot - GNOME + Wayland
+# Configuração do Flameshot para GNOME + Wayland
 #
-# Estratégia:
+# Este módulo:
 #
-#   1. Instala Flameshot e portais.
-#   2. Instala suporte AppIndicator/KStatusNotifierItem.
-#   3. Cria autostart do daemon Flameshot.
-#   4. Cria wrapper D-Bus:
+#   - instala Flameshot;
+#   - instala xdg-desktop-portal;
+#   - instala xdg-desktop-portal-gnome;
+#   - instala suporte AppIndicator;
+#   - identifica usuário GNOME;
+#   - detecta Wayland/X11;
+#   - cria autostart do Flameshot;
+#   - cria wrapper D-Bus;
+#   - configura atalho GNOME;
+#   - valida as configurações aplicadas.
 #
-#      ~/.local/bin/flameshot-screenshot
+# Workaround utilizado:
 #
-#   5. O wrapper chama Activate no StatusNotifierItem
-#      do Flameshot, equivalendo à ação do tray.
+#   flameshot gui
 #
-#   6. Configura atalho personalizado GNOME.
+# pode falhar no GNOME/Wayland com:
+#
+#   Screenshot aborted.
+#
+# Por isso o atalho chama:
+#
+#   ~/.local/bin/flameshot-screenshot
 #
 # ============================================================
 
@@ -31,12 +42,17 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 
 # ============================================================
-# 2. Configuração e bibliotecas
+# 2. Configuração
 # ============================================================
 
 if [[ -f "${ROOT_DIR}/config.conf" ]]; then
     source "${ROOT_DIR}/config.conf"
 fi
+
+
+# ============================================================
+# 3. Bibliotecas
+# ============================================================
 
 source "${ROOT_DIR}/lib/common.sh"
 source "${ROOT_DIR}/lib/logging.sh"
@@ -44,7 +60,7 @@ source "${ROOT_DIR}/lib/gnome.sh"
 
 
 # ============================================================
-# 3. Configurações
+# 4. Configurações
 # ============================================================
 
 COMPONENT_NAME="Flameshot"
@@ -59,7 +75,7 @@ CUSTOM_BINDING_SCHEMA_PATH="${CUSTOM_BINDING_SCHEMA}:${CUSTOM_BINDING_PATH}"
 
 FLAMESHOT_SHORTCUT="${FLAMESHOT_SHORTCUT:-<Shift>Print}"
 
-EXTENSION_UUID="ubuntu-appindicators@ubuntu.com"
+APPINDICATOR_UUID="ubuntu-appindicators@ubuntu.com"
 
 
 echo
@@ -70,7 +86,7 @@ echo
 
 
 # ============================================================
-# 4. Verificar configuração
+# 5. Verificar configuração
 # ============================================================
 
 if [[ "${INSTALAR_FLAMESHOT:-true}" != "true" ]]; then
@@ -84,11 +100,12 @@ if [[ "${INSTALAR_FLAMESHOT:-true}" != "true" ]]; then
         "Desabilitado no config.conf"
 
     exit 0
+
 fi
 
 
 # ============================================================
-# 5. Verificar root
+# 6. Verificar root
 # ============================================================
 
 if [[ "$EUID" -ne 0 ]]; then
@@ -101,11 +118,12 @@ if [[ "$EUID" -ne 0 ]]; then
         "Execução sem root"
 
     exit 1
+
 fi
 
 
 # ============================================================
-# 6. Instalar pacotes
+# 7. Instalar dependências
 # ============================================================
 
 info "Verificando Flameshot e dependências..."
@@ -115,18 +133,21 @@ install_package xdg-desktop-portal
 install_package xdg-desktop-portal-gnome
 install_package libglib2.0-bin
 
-# Suporte a StatusNotifierItem/AppIndicator no GNOME.
-#
-# O nome do pacote Debian é este nas versões atuais.
+
+# ------------------------------------------------------------
+# AppIndicator
+# ------------------------------------------------------------
+
 if apt-cache show \
     gnome-shell-extension-appindicator \
     >/dev/null 2>&1; then
 
-    install_package gnome-shell-extension-appindicator
+    install_package \
+        gnome-shell-extension-appindicator
 
 else
 
-    warn "gnome-shell-extension-appindicator não disponível no APT."
+    warn "gnome-shell-extension-appindicator não disponível."
 
 fi
 
@@ -135,10 +156,13 @@ success "Pacotes necessários disponíveis."
 
 
 # ============================================================
-# 7. Verificar executáveis
+# 8. Validar executáveis
 # ============================================================
 
-for command_name in flameshot gdbus; do
+for command_name in \
+    flameshot \
+    gdbus \
+    pgrep; do
 
     if ! command -v "$command_name" >/dev/null 2>&1; then
 
@@ -151,13 +175,14 @@ for command_name in flameshot gdbus; do
             "Dependência ausente: ${command_name}"
 
         exit 1
+
     fi
 
 done
 
 
 # ============================================================
-# 8. Identificar usuário GNOME
+# 9. Identificar usuário GNOME
 # ============================================================
 
 if ! gnome_detect_user; then
@@ -170,6 +195,7 @@ if ! gnome_detect_user; then
         "Usuário GNOME não identificado"
 
     exit 1
+
 fi
 
 
@@ -184,7 +210,7 @@ info "$GNOME_HOME"
 
 
 # ============================================================
-# 9. Verificar sessão GNOME
+# 10. Verificar sessão GNOME
 # ============================================================
 
 if ! gnome_session_available; then
@@ -197,11 +223,12 @@ if ! gnome_session_available; then
         "Instalado; sessão GNOME indisponível"
 
     exit 0
+
 fi
 
 
 # ============================================================
-# 10. Detectar tipo da sessão
+# 11. Detectar tipo da sessão
 # ============================================================
 
 SESSION_ID="$(
@@ -230,12 +257,25 @@ if [[ -n "$SESSION_ID" ]]; then
 fi
 
 
+if [[ -z "$SESSION_TYPE" ]]; then
+
+    SESSION_TYPE="$(
+        gnome_run \
+            sh \
+            -c 'printf "%s" "${XDG_SESSION_TYPE:-}"' \
+            2>/dev/null ||
+            true
+    )"
+
+fi
+
+
 info "Tipo da sessão:"
 info "${SESSION_TYPE:-desconhecido}"
 
 
 # ============================================================
-# 11. Diretórios do usuário
+# 12. Diretórios do usuário
 # ============================================================
 
 USER_BIN_DIR="${GNOME_HOME}/.local/bin"
@@ -261,7 +301,7 @@ chown \
 
 
 # ============================================================
-# 12. Criar wrapper D-Bus
+# 13. Criar wrapper D-Bus
 # ============================================================
 
 info "Criando wrapper do Flameshot..."
@@ -271,22 +311,21 @@ cat > "$WRAPPER_FILE" <<'EOF'
 #!/bin/bash
 
 # ============================================================
-# Flameshot Screenshot - GNOME Wayland
+# Flameshot Screenshot - GNOME/Wayland
 #
-# Workaround:
-#
-# Em algumas versões GNOME/Wayland:
+# Workaround para:
 #
 #   flameshot gui
 #
-# pode retornar:
+# retornar:
 #
-#   Screenshot aborted
+#   Screenshot aborted.
 #
-# O tray do Flameshot, entretanto, funciona.
+# Estratégia:
 #
-# Este script chama Activate no StatusNotifierItem,
-# equivalendo à ação do ícone do tray.
+#   - garantir daemon Flameshot ativo;
+#   - localizar seu StatusNotifierItem;
+#   - acionar Activate via D-Bus.
 # ============================================================
 
 set -e
@@ -298,9 +337,34 @@ set -e
 
 export QT_QPA_PLATFORM=wayland
 
+export XDG_SESSION_TYPE=wayland
+
+export XDG_CURRENT_DESKTOP=GNOME
+
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
 export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+
+
+# ------------------------------------------------------------
+# Descobrir WAYLAND_DISPLAY
+# ------------------------------------------------------------
+
+if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+
+    WAYLAND_DISPLAY="$(
+        find "$XDG_RUNTIME_DIR" \
+            -maxdepth 1 \
+            -type s \
+            -name 'wayland-*' \
+            -printf '%f\n' \
+            2>/dev/null |
+        head -n 1
+    )"
+
+    export WAYLAND_DISPLAY
+
+fi
 
 
 # ------------------------------------------------------------
@@ -320,7 +384,7 @@ fi
 
 
 # ------------------------------------------------------------
-# Aguardar registro do StatusNotifierItem
+# Consultar StatusNotifierWatcher
 # ------------------------------------------------------------
 
 ITEMS=""
@@ -349,19 +413,13 @@ done
 
 
 # ------------------------------------------------------------
-# Extrair nomes únicos de serviços D-Bus
-#
-# Exemplos possíveis:
-#
-#   :1.123
-#
-#   org.kde.StatusNotifierItem-1234-1
+# Extrair nomes D-Bus
 # ------------------------------------------------------------
 
 BUS_NAMES="$(
     printf '%s\n' "$ITEMS" |
     grep -oE \
-        '(:[0-9]+\.[0-9]+|org\.kde\.StatusNotifierItem-[^/,'"' ]+)' |
+        '(:[0-9]+\.[0-9]+|org\.kde\.StatusNotifierItem-[^/, ]+)' |
     sort -u
 )"
 
@@ -369,13 +427,14 @@ BUS_NAMES="$(
 if [[ -z "$BUS_NAMES" ]]; then
 
     echo "[ERRO] Nenhum StatusNotifierItem encontrado." >&2
+
     exit 1
 
 fi
 
 
 # ------------------------------------------------------------
-# Encontrar especificamente o item do Flameshot
+# Localizar especificamente o Flameshot
 # ------------------------------------------------------------
 
 FLAMESHOT_BUS=""
@@ -383,6 +442,7 @@ FLAMESHOT_BUS=""
 while read -r bus_name; do
 
     [[ -z "$bus_name" ]] && continue
+
 
     TITLE="$(
         /usr/bin/gdbus call \
@@ -395,6 +455,7 @@ while read -r bus_name; do
             2>/dev/null ||
             true
     )"
+
 
     ID="$(
         /usr/bin/gdbus call \
@@ -413,6 +474,7 @@ while read -r bus_name; do
         grep -qi flameshot; then
 
         FLAMESHOT_BUS="$bus_name"
+
         break
 
     fi
@@ -422,8 +484,7 @@ done <<< "$BUS_NAMES"
 
 # ------------------------------------------------------------
 # Fallback:
-#
-# Se houver exatamente um StatusNotifierItem, usamos ele.
+# se só existir um StatusNotifierItem, usar ele.
 # ------------------------------------------------------------
 
 if [[ -z "$FLAMESHOT_BUS" ]]; then
@@ -433,6 +494,7 @@ if [[ -z "$FLAMESHOT_BUS" ]]; then
         sed '/^$/d' |
         wc -l
     )"
+
 
     if [[ "$ITEM_COUNT" -eq 1 ]]; then
 
@@ -449,13 +511,14 @@ fi
 if [[ -z "$FLAMESHOT_BUS" ]]; then
 
     echo "[ERRO] StatusNotifierItem do Flameshot não encontrado." >&2
+
     exit 1
 
 fi
 
 
 # ------------------------------------------------------------
-# Disparar captura
+# Acionar screenshot
 # ------------------------------------------------------------
 
 /usr/bin/gdbus call \
@@ -485,7 +548,7 @@ info "$WRAPPER_FILE"
 
 
 # ============================================================
-# 13. Criar autostart
+# 14. Criar autostart
 # ============================================================
 
 info "Criando autostart do Flameshot..."
@@ -496,7 +559,7 @@ cat > "$AUTOSTART_FILE" <<EOF
 Type=Application
 Version=1.0
 Name=Flameshot
-Comment=Inicia Flameshot para integração GNOME/Wayland
+Comment=Inicia Flameshot no login GNOME
 Exec=/usr/bin/env QT_QPA_PLATFORM=wayland /usr/bin/flameshot
 Terminal=false
 NoDisplay=true
@@ -518,12 +581,12 @@ info "$AUTOSTART_FILE"
 
 
 # ============================================================
-# 14. Habilitar AppIndicator, se disponível
+# 15. Habilitar AppIndicator
 # ============================================================
 
-if gnome_extension_exists "$EXTENSION_UUID"; then
+if gnome_extension_exists "$APPINDICATOR_UUID"; then
 
-    if gnome_extension_enabled "$EXTENSION_UUID"; then
+    if gnome_extension_enabled "$APPINDICATOR_UUID"; then
 
         success "AppIndicator já está habilitado."
 
@@ -531,14 +594,15 @@ if gnome_extension_exists "$EXTENSION_UUID"; then
 
         info "Habilitando AppIndicator..."
 
-        if gnome_extension_enable "$EXTENSION_UUID"; then
+        if gnome_extension_enable "$APPINDICATOR_UUID"; then
 
             success "AppIndicator habilitado."
 
         else
 
             warn "Não foi possível confirmar AppIndicator nesta sessão."
-            warn "Pode ser necessário logout/login."
+
+            warn "Faça logout/login."
 
         fi
 
@@ -547,13 +611,14 @@ if gnome_extension_exists "$EXTENSION_UUID"; then
 else
 
     warn "Extensão AppIndicator ainda não aparece nesta sessão."
-    warn "Ela poderá ser carregada no próximo login."
+
+    warn "Ela deverá ser carregada no próximo login."
 
 fi
 
 
 # ============================================================
-# 15. Iniciar daemon agora
+# 16. Iniciar daemon agora
 # ============================================================
 
 info "Iniciando daemon Flameshot..."
@@ -577,7 +642,7 @@ sleep 2
 
 
 # ============================================================
-# 16. Validar daemon
+# 17. Validar daemon
 # ============================================================
 
 if gnome_run \
@@ -596,7 +661,41 @@ fi
 
 
 # ============================================================
-# 17. Adicionar custom keybinding
+# 18. Validar schemas
+# ============================================================
+
+if ! gnome_schema_exists "$CUSTOM_KEYS_SCHEMA"; then
+
+    error "Schema principal de atalhos não encontrado:"
+    error "$CUSTOM_KEYS_SCHEMA"
+
+    record_component_status \
+        "$COMPONENT_NAME" \
+        "FAIL" \
+        "Schema media-keys ausente"
+
+    exit 1
+
+fi
+
+
+if ! gnome_schema_exists "$CUSTOM_BINDING_SCHEMA_PATH"; then
+
+    error "Schema relocatable do atalho não encontrado:"
+    error "$CUSTOM_BINDING_SCHEMA_PATH"
+
+    record_component_status \
+        "$COMPONENT_NAME" \
+        "FAIL" \
+        "Schema custom-keybinding ausente"
+
+    exit 1
+
+fi
+
+
+# ============================================================
+# 19. Ler atalhos personalizados atuais
 # ============================================================
 
 CURRENT_BINDINGS="$(
@@ -605,6 +704,10 @@ CURRENT_BINDINGS="$(
         custom-keybindings
 )"
 
+
+# ============================================================
+# 20. Adicionar Flameshot à lista
+# ============================================================
 
 if printf '%s' "$CURRENT_BINDINGS" |
     grep -Fq "$CUSTOM_BINDING_PATH"; then
@@ -637,7 +740,7 @@ gnome_gsettings \
 
 
 # ============================================================
-# 18. Configurar atalho
+# 21. Configurar nome
 # ============================================================
 
 gnome_gsettings_set \
@@ -646,11 +749,19 @@ gnome_gsettings_set \
     "'Flameshot'"
 
 
+# ============================================================
+# 22. Configurar comando
+# ============================================================
+
 gnome_gsettings_set \
     "$CUSTOM_BINDING_SCHEMA_PATH" \
     command \
     "'${WRAPPER_FILE}'"
 
+
+# ============================================================
+# 23. Configurar tecla
+# ============================================================
 
 gnome_gsettings_set \
     "$CUSTOM_BINDING_SCHEMA_PATH" \
@@ -659,8 +770,22 @@ gnome_gsettings_set \
 
 
 # ============================================================
-# 19. Validar configuração
+# 24. Validar configuração final
 # ============================================================
+
+FINAL_BINDINGS="$(
+    gnome_gsettings get \
+        "$CUSTOM_KEYS_SCHEMA" \
+        custom-keybindings
+)"
+
+
+FINAL_NAME="$(
+    gnome_gsettings get \
+        "$CUSTOM_BINDING_SCHEMA_PATH" \
+        name
+)"
+
 
 FINAL_COMMAND="$(
     gnome_gsettings get \
@@ -676,17 +801,10 @@ FINAL_BINDING="$(
 )"
 
 
-FINAL_BINDINGS="$(
-    gnome_gsettings get \
-        "$CUSTOM_KEYS_SCHEMA" \
-        custom-keybindings
-)"
-
-
 if ! printf '%s' "$FINAL_BINDINGS" |
     grep -Fq "$CUSTOM_BINDING_PATH"; then
 
-    error "Atalho Flameshot não está registrado em custom-keybindings."
+    error "Atalho Flameshot não foi registrado corretamente."
 
     record_component_status \
         "$COMPONENT_NAME" \
@@ -694,11 +812,12 @@ if ! printf '%s' "$FINAL_BINDINGS" |
         "Custom keybinding ausente"
 
     exit 1
+
 fi
 
 
 # ============================================================
-# 20. Resultado
+# 25. Resultado
 # ============================================================
 
 echo
@@ -715,6 +834,10 @@ echo "Sessão:"
 echo "  ${SESSION_TYPE:-desconhecida}"
 echo
 
+echo "Nome:"
+echo "  ${FINAL_NAME}"
+echo
+
 echo "Wrapper:"
 echo "  ${WRAPPER_FILE}"
 echo
@@ -723,7 +846,7 @@ echo "Autostart:"
 echo "  ${AUTOSTART_FILE}"
 echo
 
-echo "Comando do atalho:"
+echo "Comando:"
 echo "  ${FINAL_COMMAND}"
 echo
 
@@ -733,13 +856,13 @@ echo
 
 
 # ============================================================
-# 21. Registrar resultado
+# 26. Registrar resultado
 # ============================================================
 
 record_component_status \
     "$COMPONENT_NAME" \
     "OK" \
-    "Wayland D-Bus wrapper + ${FLAMESHOT_SHORTCUT}"
+    "Wrapper D-Bus + ${FLAMESHOT_SHORTCUT}"
 
 
 success "Flameshot configurado com sucesso."
