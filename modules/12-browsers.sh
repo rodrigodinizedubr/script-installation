@@ -10,8 +10,13 @@ source "$BASE_DIR/lib/common.sh"
 # Instalar CHROME
 # ============================================================
 
-if [ "${INSTALAR_CHROME:-false}" != true ] && [ "${INSTALAR_OPERA:-false}" != true ]; then
-    mark_skipped "Navegadores opcionais desabilitados (Chrome e Opera)."
+if [ "${INSTALAR_CHROME:-false}" != true ] &&
+   [ "${INSTALAR_OPERA:-false}" != true ] &&
+   [ "${INSTALAR_ZEN_BROWSER:-false}" != true ]; then
+
+    mark_skipped \
+        "Navegadores opcionais desabilitados (Chrome, Opera e Zen Browser)."
+
     exit 0
 fi
 
